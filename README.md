@@ -120,11 +120,11 @@ streamlit run app.py      # 터미널 2: Streamlit UI (포트 8501)
 | 상황 | 동작 | 예시 |
 |------|------|------|
 | `db_path` 명시 | 지정된 DB만 검색 | `search_knowledge(query, db_path="/knowledge/nvme23")` |
-| `db_path` 미지정 + 쿼리에 DB명 포함 | 관련 DB만 자동 선택 | "uni92K 코드 만들어줘" → uni92K DB만 검색 (uni93K 제외) |
+| `db_path` 미지정 + 쿼리에 DB명 포함 | 관련 DB만 자동 선택 | "XXX92K 코드 만들어줘" → XXX92K DB만 검색 (XXX93K 제외) |
 | `db_path` 미지정 + 매칭 없음 | 전체 DB Fan-out 검색 | "telemetry 로그 구조" → 모든 DB에서 검색 후 RRF 병합 |
 
 - `list_knowledge_dbs()`: 구축된 전체 DB 목록 조회 (유형/이름/경로)
-- 독립 토큰 매칭으로 서브스트링 오매칭 방지 ("uni"가 "uni92k" 안에서 매칭되지 않음)
+- 독립 토큰 매칭으로 서브스트링 오매칭 방지 ("XXX"가 "XXX92k" 안에서 매칭되지 않음)
 - 문서별 `doc_name`, 프로젝트별 `project_name`이 검색 결과에 출처로 표시됨
 
 ### MarkdownRAG 청킹 전략
@@ -202,7 +202,7 @@ results = rag.retrieve("TEL-6", top_k=4)   # Requirement ID 직접 검색
 # ── CodeRAG (project_name으로 프로젝트 식별) ──
 from rag import CodeRAG
 
-code_rag = CodeRAG(db_store_path="/path/to/code/db", project_name="uni92K")
+code_rag = CodeRAG(db_store_path="/path/to/code/db", project_name="XXX92K")
 code_rag.build_or_load("/path/to/project/src")  # 소스코드 폴더 인덱싱
 results = code_rag.retrieve("TEL-2 관련 평가", top_k=4)    # Req ID + 도메인 검색
 results = code_rag.retrieve("main.cpp 파일은 어떤 기능?")   # 파일 요약 검색
@@ -471,11 +471,11 @@ Tier 3: 서브 청크 재조립 (function_id_index → 형제 청크 합침)
 [_list_all_dbs] → ~/.deepassist/knowledge/ 스캔
     ├── nvme23/     → doc_meta.pkl    → {doc_name: "NVMe 2.3 Base"}
     ├── ocp26/      → doc_meta.pkl    → {doc_name: "OCP 2.6 SSD"}
-    ├── uni92K/     → project_meta.pkl → {project_name: "uni92K"}
-    └── uni93K/     → project_meta.pkl → {project_name: "uni93K"}
+    ├── XXX92K/     → project_meta.pkl → {project_name: "XXX92K"}
+    └── XXX93K/     → project_meta.pkl → {project_name: "XXX93K"}
     ↓
 [_match_dbs_by_query] → 쿼리에서 DB명 키워드 독립 토큰 매칭
-    ├─ "uni92K 코드 만들어줘" → "uni92k" 매칭 → uni92K DB만 선택
+    ├─ "XXX92K 코드 만들어줘" → "XXX92k" 매칭 → XXX92K DB만 선택
     ├─ "nvme에서 telemetry"  → "nvme" 매칭 → NVMe, OCP DB 선택
     └─ "telemetry 로그 구조" → 매칭 없음 → 전체 4개 DB 검색
     ↓
