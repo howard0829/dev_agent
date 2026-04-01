@@ -1792,46 +1792,39 @@ if __name__ == "__main__":
 
     TESTS = [
         # ── 마크다운 RAG 테스트 ──────────────────────────────────
-        {
-            "type": "markdown",
-            "label": "NVMe 2.3 Base Spec",
-            "source": "/Users/howard/Project/Parser/Docs/NVM-Express-Base-Specification-Revision-2.3-2025.08.01-Ratified-ocr.md",
-            "db_path": "/Users/howard/Project/knowledge/nvme23",
-            "queries": [
-                {"tag": "의미 검색",       "query": "큐(Queue)의 제출 및 완료 메커니즘은 어떻게 동작하나요?"},
-                {"tag": "약어: RESERVS",  "query": "RESERVS"},
-                {"tag": "약어: MO",       "query": "What is Management Operation?"},
-                {"tag": "약어: SQ",       "query": "Submission Queue의 동작 원리"},
-            ],
-        },
-        {
-            "type": "markdown",
-            "label": "OCP 2.6 Datacenter NVMe SSD",
-            "source": "/Users/howard/Project/Parser/Docs/Datacenter NVMe SSD Specification v2.6-ocr.md",
-            "db_path": "/Users/howard/Project/knowledge/ocp26",
-            "queries": [
-                {"tag": "내구성/DWPD",         "query": "Datacenter NVMe SSD endurance and DWPD requirements"},
-                {"tag": "전력 관리",            "query": "power consumption and thermal management"},
-                {"tag": "텔레메트리",            "query": "SMART health information log telemetry"},
-                {"tag": "레이턴시 모니터",        "query": "latency monitor feature and bucket configuration"},
-                {"tag": "에러 복구",             "query": "error recovery and unsanitize operation"},
-                {"tag": "펌웨어 업데이트",        "query": "firmware update activation and commit"},
-                {"tag": "네임스페이스",           "query": "namespace management and capacity allocation"},
-                {"tag": "ID검색: TEL-3",         "query": "TEL-3"},
-                {"tag": "ID검색: TEL-6",         "query": "TEL-6"},
-                {"tag": "ID검색: SEC-5",         "query": "SEC-5"},
-                {"tag": "ID검색: FWUP-5",        "query": "FWUP-5"},
-                {"tag": "자연어+ID: TEL-3",      "query": "Explain to me about TEL-3 and related contents"},
-                {"tag": "자연어+ID: SEC-5",      "query": "Explain to me about SEC-5 and related contents"},
-            ],
-        },
-        # ── 코드 RAG 테스트 ──────────────────────────────────────
+        # ── 마크다운 RAG 테스트 예시 ──────────────────────────────
+        # 아래 source/db_path 경로를 실제 환경에 맞게 변경하여 사용하세요.
+        # {
+        #     "type": "markdown",
+        #     "label": "NVMe 2.3 Base Spec",
+        #     "source": "/path/to/your/markdown/document.md",
+        #     "db_path": "/path/to/knowledge/nvme23",
+        #     "queries": [
+        #         {"tag": "의미 검색",       "query": "큐(Queue)의 제출 및 완료 메커니즘은 어떻게 동작하나요?"},
+        #         {"tag": "약어: RESERVS",  "query": "RESERVS"},
+        #         {"tag": "약어: MO",       "query": "What is Management Operation?"},
+        #         {"tag": "약어: SQ",       "query": "Submission Queue의 동작 원리"},
+        #     ],
+        # },
+        # {
+        #     "type": "markdown",
+        #     "label": "OCP 2.6 Datacenter NVMe SSD",
+        #     "source": "/path/to/your/markdown/spec-document.md",
+        #     "db_path": "/path/to/knowledge/ocp26",
+        #     "queries": [
+        #         {"tag": "내구성/DWPD",         "query": "Datacenter NVMe SSD endurance and DWPD requirements"},
+        #         {"tag": "텔레메트리",            "query": "SMART health information log telemetry"},
+        #         {"tag": "ID검색: TEL-3",         "query": "TEL-3"},
+        #         {"tag": "자연어+ID: TEL-3",      "query": "Explain to me about TEL-3 and related contents"},
+        #     ],
+        # },
+        # ── 코드 RAG 테스트 예시 ──────────────────────────────────
         # 아래 source 경로를 실제 프로젝트 경로로 변경하여 사용하세요.
         # {
         #     "type": "code",
         #     "label": "NVMe Test Framework",
         #     "source": "/path/to/your/code/project",
-        #     "db_path": "/Users/howard/Project/knowledge/nvme_test_code",
+        #     "db_path": "/path/to/knowledge/nvme_test_code",
         #     "queries": [
         #         {"tag": "Req ID 검색",          "query": "TEL-2 관련 평가를 진행하고 싶어"},
         #         {"tag": "도메인 시맨틱",         "query": "Telemetry 관련 평가 구현된 이력이 있으면 설명해줘"},
