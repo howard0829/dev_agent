@@ -1,9 +1,10 @@
-# 🤖 DeepAssist
+# 🚀 DevAgent Platform
 
-**Ollama & Gemini & OpenRouter & Claude Agent SDK 기반 코딩 어시스턴트 (Streamlit UI + FastAPI 파일 서버)**
+**멀티 앱 아키텍처 기반 자율 코딩 에이전트 플랫폼 (Streamlit UI + FastAPI 파일 서버)**
 
-OpenCode 스타일의 도구를 갖춘 자율 코딩 에이전트입니다.  
-사용자의 요청을 분석하여 To-do 계획을 수립하고, 순차적으로 실행한 뒤, 검증까지 자동으로 수행합니다.  
+Ollama, Gemini API, OpenRouter, Claude Agent SDK를 지원하는 멀티 앱 플랫폼입니다.
+메인 화면 상단의 카드 바에서 앱(DeepAssist, TestMancer 등)을 선택하여 전환할 수 있으며, 각 앱의 대화 상태가 독립적으로 보존됩니다.
+사용자의 요청을 분석하여 To-do 계획을 수립하고, 순차적으로 실행한 뒤, 검증까지 자동으로 수행합니다.
 멀티유저 환경을 지원하며, 사용자 IP별로 독립 워크스페이스를 자동 할당합니다.
 
 ---
@@ -12,6 +13,8 @@ OpenCode 스타일의 도구를 갖춘 자율 코딩 에이전트입니다.
 
 | 기능 | 설명 |
 |------|------|
+| **멀티 앱 플랫폼** | 메인 화면 카드 바에서 앱(DeepAssist, TestMancer 등) 전환. 앱별 세션 독립 보존 |
+| **앱 자동 레지스트리** | `apps/{name}/config.py`에 `APP_CONFIG` 추가만으로 새 앱 자동 등록 |
 | **멀티 LLM 통합 구조** | **Claude Agent SDK**를 단일 코어로 통일 (Ollama/Gemini/OpenRouter는 LiteLLM 프록시로 변환 연결) |
 | **OpenRouter 지원** | Anthropic API Key 없이도 Claude, GPT, Gemini 등 다양한 모델을 단일 OpenRouter Key로 사용 |
 | **커스텀 룰 자동화** | 워크스페이스 내 `DeepAssist.md`가 있으면 AI 프롬프트에 자동 적용 |
@@ -294,20 +297,34 @@ python3 rag.py code         # 코드 RAG만 테스트
 ## 아키텍처
 
 ```
-DeepAssist/
-├── models.py           # 핵심 데이터 모델 (Task, Plan, ToolCallRecord)
-├── llm_clients.py      # LLM 클라이언트 (Ollama, Gemini, OpenRouter)
-├── agent.py            # Claude Agent SDK Runner (ClaudeAgentRunner)
-├── app.py              # Streamlit UI (채팅 탭 + 워크스페이스 파일 관리 탭)
-├── mcp_server.py       # MCP 서버 (Claude용 커스텀 도구 확장, RAG 도구 포함)
-├── rag.py              # FAISS + BM25 하이브리드 RAG 모듈 (MarkdownRAG + CodeRAG)
-├── server.py           # FastAPI 파일/워크스페이스 관리 서버
-├── .env                # 환경변수 (API Key, 임베딩 모델 등)
-├── start.sh            # Mac/Linux 실행 스크립트
-├── nginx.conf          # Nginx 리버스 프록시 설정
+dev_agent/
+├── app.py                      # 멀티 앱 런처 (앱 카드 바 + 라우팅)
+├── core/                       # 공유 유틸리티 (앱이 선택적으로 import)
+│   ├── session.py              # 네임스페이스 세션 상태 (앱별 독립)
+│   ├── styles.py               # 공통 CSS (앱 카드, 채팅, 사이드바)
+│   ├── sidebar.py              # LLM 프로바이더 선택 사이드바
+│   ├── chat_ui.py              # 채팅 탭 (콜백, 에이전트 생성, 메시지)
+│   └── workspace_ui.py         # 워크스페이스 파일 관리 탭
+├── apps/                       # 앱 레지스트리 (자동 검색)
+│   ├── __init__.py             # discover_apps() — config + page 자동 검색
+│   ├── deep_assist/
+│   │   ├── config.py           # DeepAssist APP_CONFIG
+│   │   └── page.py             # 사이드바/메인 렌더링 (core/ 재사용)
+│   └── test_mancer/
+│       ├── config.py           # TestMancer APP_CONFIG
+│       └── page.py             # 자체 사이드바/메인 (테스트 특화 UI)
+├── models.py                   # 핵심 데이터 모델 (Task, Plan, ToolCallRecord)
+├── llm_clients.py              # LLM 클라이언트 (Ollama, Gemini, OpenRouter)
+├── agent.py                    # Claude Agent SDK Runner (ClaudeAgentRunner)
+├── mcp_server.py               # MCP 서버 (RAG 도구 + 웹 검색)
+├── rag.py                      # FAISS + BM25 하이브리드 RAG (MarkdownRAG + CodeRAG)
+├── server.py                   # FastAPI 파일/워크스페이스 관리 서버
+├── .env                        # 환경변수 (API Key, 임베딩 모델 등)
+├── start.sh                    # Mac/Linux 실행 스크립트
+├── nginx.conf                  # Nginx 리버스 프록시 설정
 ├── requirements.txt
-├── CLAUDE.md           # 프로젝트 가이드 (Claude Code용)
-└── workspaces/         # IP별 자동 생성 워크스페이스 (24시간 후 자동 삭제)
+├── CLAUDE.md                   # 프로젝트 가이드 (Claude Code용)
+└── workspaces/                 # IP별 자동 생성 워크스페이스 (24시간 후 자동 삭제)
     ├── {session_A}/
     └── {session_B}/
 ```
@@ -320,10 +337,11 @@ DeepAssist/
 └──────────────────────────────┬──────────────────────────────────────────────┘
                                ↓
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ Streamlit (app.py) :8501                                                     │
-│  ├─ 채팅 탭: 에이전트 실행 (Agent / Chat 모드 전환)                              │
-│  ├─ 워크스페이스 탭: 파일 업로드·다운로드·편집·삭제                                  │
-│  └─ LLM 프로바이더 선택: Ollama / Gemini / OpenRouter / Claude                  │
+│ Streamlit (app.py → apps/{name}/page.py) :8501                                │
+│  ├─ 앱 스위처 카드 바: DeepAssist / TestMancer / ... (앱별 세션 독립)            │
+│  ├─ 앱별 독립 사이드바: page.render_sidebar(prefix)                              │
+│  ├─ 앱별 독립 메인 화면: page.render_main(prefix, sidebar_cfg)                   │
+│  └─ core/: 공유 유틸리티 (앱이 선택적으로 import)                                │
 └──────────┬───────────────────────────────┬──────────────────────────────────┘
            │ 에이전트 실행                    │ REST API (파일 관리)
            ↓                                ↓
@@ -398,12 +416,14 @@ DeepAssist/
 ```
 사용자 브라우저
     ↓
-┌────────────────────────────────┐
-│ Streamlit (app.py) :8501       │
-│  ├─ 채팅 탭: 에이전트 실행     │
-│  ├─ 워크스페이스 탭: 파일 관리 │
-│  └─ httpx → FastAPI 통신       │
-└──────────────┬─────────────────┘
+┌──────────────────────────────────────────────────┐
+│ app.py (런처) :8501                                │
+│  ├─ apps/ 레지스트리에서 앱 자동 검색               │
+│  ├─ 상단 카드 바: 앱 선택 (DeepAssist/TestMancer)  │
+│  ├─ page.init_app_session(prefix) → 앱별 세션     │
+│  ├─ page.render_sidebar(prefix) → 앱별 사이드바   │
+│  └─ page.render_main(prefix, cfg) → 앱별 메인     │
+└──────────────┬───────────────────────────────────┘
                │ REST API (파일 관리)
 ┌──────────────▼─────────────────┐
 │ FastAPI (server.py) :8000      │
@@ -413,6 +433,45 @@ DeepAssist/
 │  └─ Path Traversal 보안        │
 └────────────────────────────────┘
 ```
+
+### 새 앱 추가 방법
+
+```bash
+mkdir apps/my_app
+```
+
+```python
+# apps/my_app/__init__.py
+"""MyApp 설명"""
+
+# apps/my_app/config.py
+APP_CONFIG = {
+    "id": "my_app",
+    "name": "MyApp",
+    "icon": "🚀",
+    "description": "새로운 에이전트",
+    "tabs": ["chat", "workspace"],
+    "default_mode": "agent",
+    "custom_css": "",
+}
+
+# apps/my_app/page.py — 3개 필수 함수
+def init_app_session(prefix: str):
+    """앱 전용 세션 상태 초기화"""
+    from core.session import init_session
+    init_session(prefix)  # 기본 세션 + 앱 전용 키 추가 가능
+
+def render_sidebar(prefix: str) -> dict:
+    """앱 전용 사이드바 → 설정 dict 반환"""
+    ...
+
+def render_main(prefix: str, sidebar_cfg: dict):
+    """앱 전용 메인 화면 렌더링"""
+    ...
+```
+
+- `core/` 유틸리티 재사용 가능 (선택사항). 완전 자체 구현도 가능
+- 재시작 시 `discover_apps()`가 `config.py` + `page.py`를 자동 검색하여 카드 바에 등록
 
 ### MarkdownRAG 데이터 흐름
 
