@@ -376,18 +376,18 @@ DeepAssist/
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ Knowledge DB Store (~/.deepassist/knowledge/)                                │
 │                                                                              │
-│  ┌─ nvme23_xxx/ ──────┐  ┌─ ocp26_xxx/ ──────┐  ┌─ uni92K_xxx/ ──────────┐  │
+│  ┌─ nvme23_xxx/ ──────┐  ┌─ ocp26_xxx/ ──────┐  ┌─ XXX_xxx/ ──────────┐  │
 │  │ [MARKDOWN]          │  │ [MARKDOWN]         │  │ [CODE]                 │  │
-│  │ doc: NVMe 2.3 Base  │  │ doc: OCP 2.6 SSD   │  │ project: uni92K        │  │
+│  │ doc: NVMe 2.3 Base  │  │ doc: OCP 2.6 SSD   │  │ project: XXX        │  │
 │  │ faiss_index/        │  │ faiss_index/        │  │ faiss_index/           │  │
 │  │ bm25_retriever.pkl  │  │ bm25_retriever.pkl  │  │ bm25_retriever.pkl     │  │
 │  │ term_index.pkl      │  │ term_index.pkl      │  │ symbol_index.pkl       │  │
 │  │ doc_meta.pkl        │  │ doc_meta.pkl        │  │ req_id_index.pkl       │  │
 │  └─────────────────────┘  └─────────────────────┘  │ file_path_index.pkl    │  │
 │                                                     │ function_id_index.pkl  │  │
-│  ┌─ uni93K_xxx/ ──────┐  ┌─ pynvme_xxx/ ─────┐    │ file_manifest.pkl      │  │
+│  ┌─ XXXXX_xxx/ ──────┐  ┌─ XXXX_xxx/ ─────┐    │ file_manifest.pkl      │  │
 │  │ [CODE]              │  │ [CODE]             │    │ project_meta.pkl       │  │
-│  │ project: uni93K     │  │ project: pynvme    │    └────────────────────────┘  │
+│  │ project: XXXXX     │  │ project: XXXX    │    └────────────────────────┘  │
 │  │ ...                 │  │ ...                │                                │
 │  └─────────────────────┘  └─────────────────────┘                                │
 └──────────────────────────────────────────────────────────────────────────────┘
