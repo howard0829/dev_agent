@@ -72,6 +72,41 @@ class ClaudeAgentRunner:
             return False, "ANTHROPIC_API_KEY가 설정되지 않았습니다."
         if not CLAUDE_SDK_AVAILABLE:
             return False, f"claude-agent-sdk 임포트 실패: {_CLAUDE_IMPORT_ERROR}"
+
+        # Ollama/Gemini/OpenRouter: LiteLLM 프록시 필요 → 추가 검증
+        if self.llm_provider != "Claude":
+            import shutil
+            if not shutil.which("litellm"):
+                return False, (
+                    "litellm CLI를 찾을 수 없습니다. 에이전트 모드에서 Ollama/Gemini/OpenRouter를 "
+                    "사용하려면 'pip install litellm[proxy]'로 설치하세요."
+                )
+            try:
+                import yaml  # noqa: F401
+            except ImportError:
+                return False, "PyYAML이 설치되지 않았습니다. 'pip install pyyaml'로 설치하세요."
+
+        # Ollama: 서버 접근성 추가 확인
+        if self.llm_provider == "Ollama":
+            import requests as _req
+            ollama_base = self.ollama_url or "http://localhost:11434"
+            try:
+                resp = _req.get(f"{ollama_base}/api/tags", timeout=5)
+                if resp.status_code != 200:
+                    return False, f"Ollama 서버 응답 오류 (status={resp.status_code})"
+                models = [m["name"] for m in resp.json().get("models", [])]
+                model_base = self.model.split(":")[0] if ":" in self.model else self.model
+                found = any(model_base in m for m in models)
+                if not found:
+                    return False, (
+                        f"Ollama 서버에 모델 '{self.model}'이 없습니다.\n"
+                        f"사용 가능: {', '.join(models[:10])}"
+                    )
+            except _req.ConnectionError:
+                return False, f"Ollama 서버({ollama_base})에 연결할 수 없습니다. 'ollama serve' 실행 여부를 확인하세요."
+            except Exception as e:
+                return False, f"Ollama 연결 확인 중 오류: {e}"
+
         return True, f"Claude Agent SDK 준비됨 (Provider: {self.llm_provider}, Model: {self.model})"
 
     def run(self, prompt: str) -> str:
@@ -400,9 +435,55 @@ class ClaudeAgentRunner:
         litellm_path = shutil.which("litellm") or "litellm"
         cmd = [litellm_path, "--config", config_file.name, "--port", "4000"]
 
-        proxy_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # stderr를 PIPE로 받아 실패 원인 진단 가능하게 함
+        proxy_process = subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
+        )
         self._litellm_config_path = config_file.name  # cleanup용 보관
-        time.sleep(4)
+
+        # 프록시 기동 대기 + Health check
+        import requests as _req
+        max_wait = 15  # 최대 15초 대기
+        started = False
+        for i in range(max_wait):
+            time.sleep(1)
+            # 프로세스가 이미 죽었는지 확인
+            if proxy_process.poll() is not None:
+                stderr_output = ""
+                try:
+                    stderr_output = proxy_process.stderr.read().decode("utf-8", errors="replace")[-500:]
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    f"LiteLLM 프록시가 시작 직후 종료되었습니다 (exit code: {proxy_process.returncode}).\n"
+                    f"stderr: {stderr_output}"
+                )
+            # Health check
+            try:
+                health_resp = _req.get("http://127.0.0.1:4000/health", timeout=2)
+                if health_resp.status_code == 200:
+                    started = True
+                    event_queue.put(("status", f"LiteLLM 프록시 시작 완료 ({i + 1}초)"))
+                    break
+            except _req.ConnectionError:
+                pass  # 아직 기동 중
+            except Exception:
+                pass
+
+        if not started:
+            # 마지막으로 프로세스 상태 확인
+            if proxy_process.poll() is not None:
+                stderr_output = ""
+                try:
+                    stderr_output = proxy_process.stderr.read().decode("utf-8", errors="replace")[-500:]
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    f"LiteLLM 프록시 시작 실패 (exit code: {proxy_process.returncode}).\n"
+                    f"stderr: {stderr_output}"
+                )
+            event_queue.put(("status", f"⚠️ LiteLLM 프록시 Health check 실패 ({max_wait}초 대기). 계속 진행합니다..."))
+
         return proxy_process
 
     @staticmethod

@@ -233,7 +233,19 @@ def _handle_prompt(prefix: str, prompt: str, provider_cfg: dict, callbacks: dict
         agent.on_status = live_on_status
 
     if is_agent_mode:
-        # ── 에이전트 모드: 스피너 + SDK 호출 ──
+        # ── 에이전트 모드: 연결 확인 + 스피너 + SDK 호출 ──
+        ok, conn_msg = agent.check_connection()
+        if not ok:
+            response = f"❌ 에이전트 연결 실패:\n\n{conn_msg}"
+            with st.chat_message("assistant"):
+                st.markdown(response)
+            messages = get_state(prefix, "messages", [])
+            messages.append({"role": "assistant", "content": response, "tool_calls": [], "plan": None})
+            set_state(prefix, "messages", messages)
+            set_state(prefix, "is_running", False)
+            st.rerun()
+            return
+
         with st.spinner("🤖 에이전트 작업 중..."):
             try:
                 response = agent.run(prompt)
