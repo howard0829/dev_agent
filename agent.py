@@ -375,6 +375,8 @@ class ClaudeAgentRunner:
 
         if self.llm_provider == "Ollama":
             litellm_params["model"] = f"ollama/{self.model}"
+            litellm_params["supports_function_calling"] = True
+            litellm_params["num_ctx"] = 32768
             if self.ollama_url:
                 litellm_params["api_base"] = self.ollama_url
         elif self.llm_provider == "OpenRouter":
@@ -383,9 +385,11 @@ class ClaudeAgentRunner:
             else:
                 litellm_params["model"] = f"openrouter/{self.model}"
             litellm_params["api_key"] = self.api_key
+            litellm_params["supports_function_calling"] = True
         else:  # Gemini
             litellm_params["model"] = f"gemini/{self.model}"
             litellm_params["api_key"] = self.api_key
+            litellm_params["supports_function_calling"] = True
 
         # Claude CLI가 보내는 모델명을 실제 모델로 매핑하는 config 생성
         # CLI는 기본 모델명(claude-sonnet-4-6 등)으로 요청하므로
@@ -410,7 +414,7 @@ class ClaudeAgentRunner:
                 },
             ],
             "litellm_settings": {
-                "drop_params": True,
+                "drop_params": False,
             },
         }
 

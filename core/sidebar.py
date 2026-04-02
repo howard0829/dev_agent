@@ -46,8 +46,8 @@ def render_llm_sidebar() -> dict:
         )
         model_name = st.text_input(
             "모델",
-            value="qwen3-vl:2b",
-            help="Ollama에 설치된 모델명 (예: qwen3-vl:2b)",
+            value="qwen3:8b",
+            help="Ollama에 설치된 모델명 (에이전트 모드는 tool calling 지원 모델 필요: qwen3:8b, llama3.1 등)",
         )
         if st.button("🔌 연결 테스트", use_container_width=True):
             client = OllamaClient(ollama_url, model_name)
