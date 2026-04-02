@@ -1,16 +1,14 @@
 """
 DeepAssist - LLM 클라이언트
-Ollama, Gemini API, OpenRouter: 단순 채팅 모드용 클라이언트
+Ollama, Gemini API: 단순 채팅 모드용 클라이언트
 """
 
-import os
 import json
 import uuid
 from abc import ABC, abstractmethod
 from typing import Dict, Generator, List
 
 import requests
-from dotenv import load_dotenv
 
 try:
     from google import genai
@@ -290,183 +288,5 @@ class GeminiClient(BaseLLMClient):
         except Exception as e:
             return {"error": f"API 오류: {str(e)}"}
 
-
-class OpenRouterClient(BaseLLMClient):
-    """OpenRouter API 클라이언트 (OpenAI 호환 형식)"""
-
-    BASE_URL = "https://openrouter.ai/api/v1"
-
-    def __init__(self, api_key: str = None, model: str = "anthropic/claude-sonnet-4"):
-        load_dotenv()
-        # api_key가 없으면 .env의 OPENROUTER_API_KEY를 사용
-        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY", "")
-        self.model = model
-
-    def check_connection(self) -> tuple[bool, str]:
-        if not self.api_key:
-            return False, "OpenRouter API Key가 설정되지 않았습니다."
-        try:
-            resp = requests.post(
-                f"{self.BASE_URL}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self.model,
-                    "messages": [{"role": "user", "content": "hi"}],
-                    "max_tokens": 1,
-                },
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                return True, f"연결됨 (모델: {self.model})"
-            error_data = resp.json().get("error", {})
-            err_msg = error_data.get("message", resp.text)
-            code = error_data.get("code", resp.status_code)
-            if code == 429 or "rate limit" in err_msg.lower():
-                raw = error_data.get("metadata", {}).get("raw", "")
-                return False, f"⚠️ 일일 무료 한도 초과 (50회/일). 자정(UTC) 후 재시도하세요. ({raw[:80]})" if raw else f"⚠️ 일일 무료 한도 초과 (50회/일). 자정(UTC) 후 재시도하세요."
-            return False, f"OpenRouter 오류: {err_msg}"
-        except Exception as e:
-            return False, f"연결 오류: {e}"
-
-    def chat(
-        self,
-        messages: List[Dict],
-        tools: List[Dict] = None,
-        enable_thinking: bool = False,
-        stream_to_terminal: bool = False,
-    ) -> Dict:
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "stream": stream_to_terminal,
-        }
-        if tools:
-            payload["tools"] = tools
-
-        try:
-            resp = requests.post(
-                f"{self.BASE_URL}/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=300,
-                stream=stream_to_terminal,
-            )
-            resp.raise_for_status()
-
-            if stream_to_terminal:
-                full_message = {"role": "assistant", "content": ""}
-                tool_calls = []
-
-                for line in resp.iter_lines():
-                    if not line:
-                        continue
-                    line_str = line.decode("utf-8") if isinstance(line, bytes) else line
-                    if not line_str.startswith("data: "):
-                        continue
-                    data = line_str[6:]
-                    if data.strip() == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data)
-                        delta = chunk.get("choices", [{}])[0].get("delta", {})
-                        if delta.get("content"):
-                            c = delta["content"]
-                            full_message["content"] += c
-                            print(c, end="", flush=True)
-                        if delta.get("tool_calls"):
-                            for tc in delta["tool_calls"]:
-                                idx = tc.get("index", 0)
-                                while len(tool_calls) <= idx:
-                                    tool_calls.append({
-                                        "id": "",
-                                        "type": "function",
-                                        "function": {"name": "", "arguments": ""},
-                                    })
-                                if tc.get("id"):
-                                    tool_calls[idx]["id"] = tc["id"]
-                                fn = tc.get("function", {})
-                                if fn.get("name"):
-                                    tool_calls[idx]["function"]["name"] = fn["name"]
-                                if fn.get("arguments"):
-                                    tool_calls[idx]["function"]["arguments"] += fn["arguments"]
-                    except json.JSONDecodeError:
-                        pass
-
-                if tool_calls:
-                    full_message["tool_calls"] = tool_calls
-                print()
-                return {"message": full_message}
-            else:
-                data = resp.json()
-                choice = data.get("choices", [{}])[0]
-                msg = choice.get("message", {})
-                full_message = {
-                    "role": "assistant",
-                    "content": msg.get("content", "") or "",
-                }
-                if msg.get("tool_calls"):
-                    full_message["tool_calls"] = msg["tool_calls"]
-                return {"message": full_message}
-
-        except requests.Timeout:
-            return {"error": "API 호출 타임아웃 (300초)"}
-        except requests.ConnectionError:
-            return {"error": "API 연결 끊김"}
-        except Exception as e:
-            return {"error": f"API 오류: {e}"}
-
-    def stream_chat(
-        self,
-        messages: List[Dict],
-        enable_thinking: bool = False,
-    ) -> Generator[str, None, None]:
-        """UI 스트리밍용 제너레이터 - 청크 단위로 텍스트를 yield"""
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "stream": True,
-        }
-
-        try:
-            resp = requests.post(
-                f"{self.BASE_URL}/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=300,
-                stream=True,
-            )
-            resp.raise_for_status()
-
-            for line in resp.iter_lines():
-                if not line:
-                    continue
-                line_str = line.decode("utf-8") if isinstance(line, bytes) else line
-                if not line_str.startswith("data: "):
-                    continue
-                data = line_str[6:]
-                if data.strip() == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data)
-                    delta = chunk.get("choices", [{}])[0].get("delta", {})
-                    if delta.get("content"):
-                        yield delta["content"]
-                except json.JSONDecodeError:
-                    pass
-
-        except Exception as e:
-            yield f"\n\n❌ 스트리밍 오류: {e}"
 
 

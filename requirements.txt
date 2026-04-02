@@ -45,8 +45,8 @@ httpx>=0.27.0,<1.0.0
 claude-agent-sdk>=0.1.50
 mcp>=1.0.0
 
-# LLM Proxy (Anthropic to OpenAI format bridge)
-litellm[proxy]>=1.0.0
+# LLM Proxy (Claude API → Ollama/OpenRouter/Gemini/vLLM 변환)
+claude-code-proxy>=0.1.0
 
 # Web Search MCP
 duckduckgo-search>=6.0.0

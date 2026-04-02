@@ -5,8 +5,7 @@
 
 import os
 import streamlit as st
-from llm_clients import OllamaClient, GeminiClient, OpenRouterClient
-from agent import ClaudeAgentRunner
+from llm_clients import OllamaClient, GeminiClient
 
 
 def render_llm_sidebar() -> dict:
@@ -19,23 +18,24 @@ def render_llm_sidebar() -> dict:
             "model_name": str,
             "api_key": str,
             "ollama_url": str,
-            "claude_model": str,
+            "vllm_url": str,
             "enable_thinking": bool,
             "agent_mode": str,
+            "backend_mode": str,
         }
     """
     st.markdown("---")
     st.markdown("### ⚙️ LLM 프로바이더 설정")
     llm_provider = st.radio(
         "Provider 선택",
-        ["Ollama", "Gemini API", "OpenRouter", "Claude"],
+        ["Ollama", "Gemini API", "vLLM"],
         horizontal=True,
     )
 
     # 프로바이더별 초기값
     ollama_url = "http://localhost:11434"
+    vllm_url = "http://localhost:8000"
     api_key = ""
-    claude_model = "sonnet"
     model_name = ""
 
     if llm_provider == "Ollama":
@@ -77,65 +77,42 @@ def render_llm_sidebar() -> dict:
             else:
                 st.error(msg)
 
-    elif llm_provider == "OpenRouter":
-        api_key = st.text_input(
-            "OpenRouter API Key",
-            type="password",
-            value=os.getenv("OPENROUTER_API_KEY", ""),
-            help="openrouter.ai에서 발급받은 API Key",
+    else:  # vLLM
+        vllm_url = st.text_input(
+            "vLLM 서버 URL",
+            value="http://localhost:8000",
+            help="vLLM 서빙 엔진 주소 (OpenAI 호환 API)",
         )
-        model_name = st.selectbox(
-            "모델",
-            [
-                # 코딩 특화
-                "qwen/qwen3-coder:free",
-                # 대형 범용 모델
-                "nvidia/nemotron-3-super-120b-a12b:free",
-                "qwen/qwen3-next-80b-a3b-instruct:free",
-                "openai/gpt-oss-120b:free",
-                "nousresearch/hermes-3-llama-3.1-405b:free",
-                "meta-llama/llama-3.3-70b-instruct:free",
-                # 중형 범용 모델
-                "stepfun/step-3.5-flash:free",
-                "google/gemma-3-27b-it:free",
-                "minimax/minimax-m2.5:free",
-                # 경량/빠른 응답
-                "nvidia/nemotron-nano-9b-v2:free",
-                "google/gemma-3-12b-it:free",
-                "google/gemma-3-4b-it:free",
-            ],
-            help="OpenRouter 무료 티어 모델 (일 50회 제한)",
+        model_name = st.text_input(
+            "모델명",
+            value="Qwen/Qwen3-8B",
+            help="vLLM에 로드된 모델 ID (HuggingFace 이름)",
+        )
+        st.info(
+            "💡 vLLM 서버 시작 예시:\n"
+            "```\n"
+            "vllm serve Qwen/Qwen3-8B \\\n"
+            "  --enable-auto-tool-choice \\\n"
+            "  --tool-call-parser hermes \\\n"
+            "  --guided-decoding-backend outlines\n"
+            "```"
         )
         if st.button("🔌 연결 테스트", use_container_width=True):
-            client = OpenRouterClient(api_key, model_name)
-            ok, msg = client.check_connection()
-            if ok:
-                st.success(msg)
-            else:
-                st.error(msg)
-
-    else:  # Claude
-        api_key = st.text_input(
-            "Anthropic API Key",
-            type="password",
-            value=os.getenv("ANTHROPIC_API_KEY", ""),
-            help="Anthropic에서 발급받은 API Key",
-        )
-        claude_model = st.selectbox(
-            "Claude 모델",
-            ["sonnet", "opus", "haiku"],
-            help="Claude Agent SDK 모델 (sonnet 권장)",
-        )
-        model_name = f"claude-{claude_model}"
-        if st.button("🔌 연결 테스트", use_container_width=True):
-            runner = ClaudeAgentRunner(
-                llm_provider="Claude", api_key=api_key, model=claude_model
-            )
-            ok, msg = runner.check_connection()
-            if ok:
-                st.success(msg)
-            else:
-                st.error(msg)
+            import requests as _req
+            try:
+                resp = _req.get(f"{vllm_url.rstrip('/')}/v1/models", timeout=5)
+                if resp.status_code == 200:
+                    models = [m["id"] for m in resp.json().get("data", [])]
+                    if model_name in models:
+                        st.success(f"vLLM 연결 성공 (모델: {model_name})")
+                    else:
+                        st.warning(f"서버 연결됨. 사용 가능 모델: {', '.join(models)}")
+                else:
+                    st.error(f"vLLM 응답 오류 (status={resp.status_code})")
+            except _req.ConnectionError:
+                st.error(f"vLLM 서버({vllm_url})에 연결할 수 없습니다.")
+            except Exception as e:
+                st.error(f"연결 오류: {e}")
 
     st.markdown("---")
     st.markdown("### 🎛️ 에이전트 설정")
@@ -145,6 +122,23 @@ def render_llm_sidebar() -> dict:
         value=False,
         help="Qwen3의 /think 모드 활성화 (더 정확하지만 느림)",
     )
+
+    # 백엔드 모드 (vLLM 이외 프로바이더에서만 표시)
+    backend_mode = "auto"
+    if llm_provider not in ("vLLM",):
+        st.markdown("---")
+        st.markdown("### 🔌 백엔드 모드")
+        backend_mode = st.radio(
+            "백엔드 선택",
+            options=["auto", "proxy", "native"],
+            index=0,
+            help=(
+                "auto: Native 시도 후 실패 시 Proxy 폴백\n"
+                "proxy: claude-code-proxy 경유 (안정적)\n"
+                "native: Ollama Anthropic API 직접 연결 (실험적, Ollama v0.14+)"
+            ),
+            horizontal=True,
+        )
 
     st.markdown("---")
     st.markdown("### 🔧 실행 모드")
@@ -161,7 +155,8 @@ def render_llm_sidebar() -> dict:
         "model_name": model_name,
         "api_key": api_key,
         "ollama_url": ollama_url,
-        "claude_model": claude_model,
+        "vllm_url": vllm_url,
         "enable_thinking": enable_thinking,
         "agent_mode": agent_mode,
+        "backend_mode": backend_mode,
     }

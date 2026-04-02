@@ -8,7 +8,7 @@ import datetime
 import streamlit as st
 
 from models import Plan, ToolCallRecord
-from llm_clients import OllamaClient, GeminiClient, OpenRouterClient
+from llm_clients import OllamaClient, GeminiClient
 from agent import ClaudeAgentRunner
 from core.session import ns, get_state, set_state
 
@@ -100,21 +100,23 @@ def _get_agent(prefix: str, provider_cfg: dict, callbacks: dict, is_agent_mode: 
     model_name = provider_cfg["model_name"]
     api_key = provider_cfg["api_key"]
     ollama_url = provider_cfg["ollama_url"]
-    claude_model = provider_cfg["claude_model"]
+    vllm_url = provider_cfg.get("vllm_url", "http://localhost:8000")
+    backend_mode = provider_cfg.get("backend_mode", "auto")
     working_dir = get_state(prefix, "working_dir", os.path.expanduser("~"))
 
     if is_agent_mode:
-        model_val = claude_model if llm_provider == "Claude" else model_name
         runner = ClaudeAgentRunner(
             llm_provider=llm_provider,
             api_key=api_key,
-            model=model_val,
+            model=model_name,
             ollama_url=ollama_url if llm_provider == "Ollama" else None,
+            vllm_url=vllm_url if llm_provider == "vLLM" else None,
             max_turns=150,
             working_dir=working_dir,
             on_status=callbacks["on_status"],
             on_tool_call=callbacks["on_tool_call"],
             on_plan_update=callbacks["on_plan_update"],
+            backend_mode=backend_mode,
         )
         runner.on_todo_update = callbacks["on_todo_update"]
         return runner
@@ -124,13 +126,13 @@ def _get_agent(prefix: str, provider_cfg: dict, callbacks: dict, is_agent_mode: 
             return OllamaClient(ollama_url, model_name)
         elif llm_provider == "Gemini API":
             return GeminiClient(api_key, model_name)
-        elif llm_provider == "OpenRouter":
-            return OpenRouterClient(api_key, model_name)
         else:
+            # vLLM 등 — 에이전트 러너를 채팅 모드로 사용
             return ClaudeAgentRunner(
                 llm_provider=llm_provider,
                 api_key=api_key,
-                model=claude_model,
+                model=model_name,
+                vllm_url=vllm_url if llm_provider == "vLLM" else None,
                 working_dir=working_dir,
                 max_turns=150,
             )
@@ -217,10 +219,9 @@ def _handle_prompt(prefix: str, prompt: str, provider_cfg: dict, callbacks: dict
         orig_on_tool_call = agent.on_tool_call
         def live_on_tool_call(record: ToolCallRecord):
             orig_on_tool_call(record)
-            if llm_provider != "Claude":
-                live_logs.append(f"🔧 **{record.tool_name}** 호출 완료")
-                with main_log_container.container():
-                    st.info("\n\n".join(live_logs[-8:]))
+            live_logs.append(f"🔧 **{record.tool_name}** 호출 완료")
+            with main_log_container.container():
+                st.info("\n\n".join(live_logs[-8:]))
         agent.on_tool_call = live_on_tool_call
 
     if hasattr(agent, "on_status"):
@@ -284,7 +285,7 @@ def _handle_prompt(prefix: str, prompt: str, provider_cfg: dict, callbacks: dict
                         response = f"❌ 오류:\n```\n{e}\n```"
                 st.markdown(response)
             else:
-                # OllamaClient / GeminiClient / OpenRouterClient — UI 스트리밍
+                # OllamaClient / GeminiClient — UI 스트리밍
                 msgs = [
                     {"role": m["role"], "content": str(m.get("content", ""))}
                     for m in get_state(prefix, "messages", [])

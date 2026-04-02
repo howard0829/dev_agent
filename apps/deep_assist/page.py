@@ -34,7 +34,7 @@ def render_sidebar(prefix: str) -> dict:
         dict: provider_cfg (llm_provider, model_name, api_key, ...)
     """
     st.markdown("## 🤖 DeepAssist")
-    st.caption("Ollama · Gemini · OpenRouter · Claude")
+    st.caption("Ollama · Gemini · vLLM")
 
     # 공통 LLM 프로바이더 선택 UI 재사용
     provider_cfg = render_llm_sidebar()

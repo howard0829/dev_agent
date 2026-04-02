@@ -9,7 +9,7 @@ import streamlit as st
 
 from core.session import ns, get_state, set_state, display_path
 from models import Plan, ToolCallRecord
-from llm_clients import OllamaClient, GeminiClient, OpenRouterClient
+from llm_clients import OllamaClient, GeminiClient
 from agent import ClaudeAgentRunner
 
 
@@ -60,51 +60,43 @@ def render_sidebar(prefix: str) -> dict:
     st.markdown("### ⚙️ LLM 설정")
     llm_provider = st.radio(
         "Provider",
-        ["Claude", "OpenRouter", "Ollama"],
+        ["Ollama", "Gemini API", "vLLM"],
         horizontal=True,
         key=f"{prefix}_llm_provider",
     )
 
     api_key = ""
     ollama_url = "http://localhost:11434"
-    claude_model = "sonnet"
+    vllm_url = "http://localhost:8000"
     model_name = ""
 
-    if llm_provider == "Claude":
-        api_key = st.text_input(
-            "Anthropic API Key",
-            type="password",
-            value=os.getenv("ANTHROPIC_API_KEY", ""),
-            key=f"{prefix}_api_key",
-        )
-        claude_model = st.selectbox(
-            "모델", ["sonnet", "opus", "haiku"],
-            key=f"{prefix}_claude_model",
-        )
-        model_name = f"claude-{claude_model}"
-    elif llm_provider == "OpenRouter":
-        api_key = st.text_input(
-            "OpenRouter API Key",
-            type="password",
-            value=os.getenv("OPENROUTER_API_KEY", ""),
-            key=f"{prefix}_api_key",
-        )
-        model_name = st.selectbox(
-            "모델",
-            [
-                "qwen/qwen3-coder:free",
-                "meta-llama/llama-3.3-70b-instruct:free",
-                "google/gemma-3-27b-it:free",
-            ],
-            key=f"{prefix}_model",
-        )
-    else:  # Ollama
+    if llm_provider == "Ollama":
         ollama_url = st.text_input(
             "Ollama URL", value="http://localhost:11434",
             key=f"{prefix}_ollama_url",
         )
         model_name = st.text_input(
-            "모델", value="qwen3-vl:2b",
+            "모델", value="qwen3:8b",
+            key=f"{prefix}_model",
+        )
+    elif llm_provider == "Gemini API":
+        api_key = st.text_input(
+            "Gemini API Key",
+            type="password",
+            key=f"{prefix}_api_key",
+        )
+        model_name = st.selectbox(
+            "모델",
+            ["gemini-2.5-flash-lite"],
+            key=f"{prefix}_model",
+        )
+    else:  # vLLM
+        vllm_url = st.text_input(
+            "vLLM 서버 URL", value="http://localhost:8000",
+            key=f"{prefix}_vllm_url",
+        )
+        model_name = st.text_input(
+            "모델명", value="Qwen/Qwen3-8B",
             key=f"{prefix}_model",
         )
 
@@ -155,7 +147,7 @@ def render_sidebar(prefix: str) -> dict:
         "model_name": model_name,
         "api_key": api_key,
         "ollama_url": ollama_url,
-        "claude_model": claude_model,
+        "vllm_url": vllm_url,
         "enable_thinking": False,
         "agent_mode": "🤖 에이전트 (계획→실행→검증)",
         # TestMancer 전용
@@ -219,7 +211,6 @@ def _render_chat(prefix: str, sidebar_cfg: dict):
 
         is_running = get_state(prefix, "is_running", False)
         if not is_running:
-            # 테스트 특화 플레이스홀더
             prompt = st.chat_input(
                 "테스트할 내용을 입력하세요 (예: '이 모듈의 유닛 테스트를 작성해줘')",
                 key=f"{prefix}_chat_input",
@@ -330,16 +321,16 @@ def _create_agent(prefix: str, sidebar_cfg: dict, callbacks: dict):
     llm_provider = sidebar_cfg["llm_provider"]
     api_key = sidebar_cfg["api_key"]
     model_name = sidebar_cfg["model_name"]
-    claude_model = sidebar_cfg["claude_model"]
     ollama_url = sidebar_cfg["ollama_url"]
+    vllm_url = sidebar_cfg.get("vllm_url", "http://localhost:8000")
     working_dir = get_state(prefix, "working_dir", os.path.expanduser("~"))
 
-    model_val = claude_model if llm_provider == "Claude" else model_name
     runner = ClaudeAgentRunner(
         llm_provider=llm_provider,
         api_key=api_key,
-        model=model_val,
+        model=model_name,
         ollama_url=ollama_url if llm_provider == "Ollama" else None,
+        vllm_url=vllm_url if llm_provider == "vLLM" else None,
         max_turns=150,
         working_dir=working_dir,
         on_status=callbacks["on_status"],
