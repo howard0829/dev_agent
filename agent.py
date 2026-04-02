@@ -343,6 +343,26 @@ class ClaudeAgentRunner:
         finally:
             if proxy_process:
                 proxy_process.terminate()
+            # 프록시 로그 파일 닫기
+            log_fh = getattr(self, "_litellm_log_file", None)
+            if log_fh:
+                try:
+                    log_fh.close()
+                except Exception:
+                    pass
+            # 드롭된 파라미터 감지 및 보고
+            log_path = getattr(self, "_litellm_log_path", None)
+            if log_path and os.path.exists(log_path):
+                dropped = self._detect_dropped_params(log_path)
+                if dropped:
+                    event_queue.put(("status",
+                        f"⚠️ LiteLLM이 미지원 파라미터를 드롭했습니다: {dropped}\n"
+                        f"   (이 파라미터들은 {self.llm_provider}에서 지원하지 않아 자동 제거됨)"
+                    ))
+                try:
+                    os.unlink(log_path)
+                except OSError:
+                    pass
             # LiteLLM config 임시 파일 정리
             cfg_path = getattr(self, "_litellm_config_path", None)
             if cfg_path and os.path.exists(cfg_path):
@@ -414,7 +434,7 @@ class ClaudeAgentRunner:
                 },
             ],
             "litellm_settings": {
-                "drop_params": False,
+                "drop_params": True,
             },
         }
 
@@ -437,13 +457,21 @@ class ClaudeAgentRunner:
             os.environ["OPENROUTER_API_KEY"] = self.api_key
 
         litellm_path = shutil.which("litellm") or "litellm"
-        cmd = [litellm_path, "--config", config_file.name, "--port", "4000"]
 
-        # stderr를 PIPE로 받아 실패 원인 진단 가능하게 함
+        # 프록시 로그를 파일로 캡처 (드롭 파라미터 감지 + 디버깅용)
+        log_file_path = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".log", prefix="litellm_log_", delete=False
+        ).name
+        self._litellm_log_path = log_file_path
+        log_file = open(log_file_path, "w", encoding="utf-8")
+
+        cmd = [litellm_path, "--config", config_file.name, "--port", "4000", "--detailed_debug"]
+
         proxy_process = subprocess.Popen(
-            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
+            cmd, stdout=log_file, stderr=subprocess.STDOUT
         )
         self._litellm_config_path = config_file.name  # cleanup용 보관
+        self._litellm_log_file = log_file  # cleanup용 보관
 
         # 프록시 기동 대기 + Health check
         import requests as _req
@@ -453,14 +481,11 @@ class ClaudeAgentRunner:
             time.sleep(1)
             # 프로세스가 이미 죽었는지 확인
             if proxy_process.poll() is not None:
-                stderr_output = ""
-                try:
-                    stderr_output = proxy_process.stderr.read().decode("utf-8", errors="replace")[-500:]
-                except Exception:
-                    pass
+                log_file.close()
+                log_content = self._read_proxy_log_tail(log_file_path, 1000)
                 raise RuntimeError(
                     f"LiteLLM 프록시가 시작 직후 종료되었습니다 (exit code: {proxy_process.returncode}).\n"
-                    f"stderr: {stderr_output}"
+                    f"로그:\n{log_content}"
                 )
             # Health check
             try:
@@ -475,20 +500,48 @@ class ClaudeAgentRunner:
                 pass
 
         if not started:
-            # 마지막으로 프로세스 상태 확인
             if proxy_process.poll() is not None:
-                stderr_output = ""
-                try:
-                    stderr_output = proxy_process.stderr.read().decode("utf-8", errors="replace")[-500:]
-                except Exception:
-                    pass
+                log_file.close()
+                log_content = self._read_proxy_log_tail(log_file_path, 1000)
                 raise RuntimeError(
                     f"LiteLLM 프록시 시작 실패 (exit code: {proxy_process.returncode}).\n"
-                    f"stderr: {stderr_output}"
+                    f"로그:\n{log_content}"
                 )
             event_queue.put(("status", f"⚠️ LiteLLM 프록시 Health check 실패 ({max_wait}초 대기). 계속 진행합니다..."))
 
         return proxy_process
+
+    @staticmethod
+    def _read_proxy_log_tail(log_path: str, max_chars: int = 500) -> str:
+        """프록시 로그 파일의 마지막 N자를 읽어 반환"""
+        try:
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+                return content[-max_chars:] if len(content) > max_chars else content
+        except Exception:
+            return "(로그 읽기 실패)"
+
+    @staticmethod
+    def _detect_dropped_params(log_path: str) -> str:
+        """프록시 로그에서 드롭된 파라미터를 감지하여 목록 문자열 반환"""
+        dropped_params = set()
+        try:
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    # LiteLLM 드롭 로그 패턴: "dropping param: ..." 또는 "Dropping unsupported params: ..."
+                    lower = line.lower()
+                    if "drop" in lower and "param" in lower:
+                        # 파라미터명 추출: [...] 또는 'param_name' 패턴
+                        bracket_match = re.search(r"\[([^\]]+)\]", line)
+                        if bracket_match:
+                            params = bracket_match.group(1)
+                            for p in params.replace("'", "").replace('"', "").split(","):
+                                p = p.strip()
+                                if p:
+                                    dropped_params.add(p)
+        except Exception:
+            pass
+        return ", ".join(sorted(dropped_params))
 
     @staticmethod
     def _short_path(path: str) -> str:
