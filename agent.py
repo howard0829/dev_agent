@@ -35,6 +35,15 @@ except Exception as _claude_err:
 # 미완료 Task 자동 재시도 최대 횟수
 MAX_CONTINUATIONS = 2
 
+# 텍스트 도구 호출 감지 시 재프롬프트 최대 횟수
+MAX_TOOL_TEXT_RETRIES = 3
+
+# 텍스트에서 도구 호출 JSON을 감지하기 위한 패턴
+_TOOL_NAMES_PATTERN = "|".join([
+    "Bash", "Read", "Write", "Edit", "Glob", "Grep",
+    "list_knowledge_dbs", "search_knowledge", "search_web_and_scrape",
+])
+
 # SDK에 전달할 허용 도구 목록 (모델이 필요시 자동 선택)
 ALLOWED_TOOLS = [
     "Bash", "Read", "Write", "Edit", "Glob", "Grep",
@@ -184,6 +193,8 @@ class ClaudeAgentRunner:
             "1. You MUST USE TOOLS (Write, Edit, Bash, etc.) to create or alter files. DO NOT just output code blocks.\n"
             f"2. ALWAYS use ABSOLUTE PATHS starting with `{wd}/` for all file tool arguments.\n"
             "3. Before Write or Edit, you MUST call Read on that path first.\n"
+            "4. NEVER output tool call JSON as text. You must invoke tools through the tool calling interface, "
+            "not by printing JSON like {\"name\": \"Write\", ...}. Text output of JSON does NOT execute the tool.\n"
         )
 
         # DeepAssist.md 자동 로드 (크기 제한 적용)
@@ -252,8 +263,12 @@ class ClaudeAgentRunner:
             f"{prompt}"
         )
 
+        tool_text_retry_count = 0  # 텍스트 도구 호출 감지 연속 카운터
+
         async def _process_response(client, event_queue, todo_items, tool_counter, last_tool_record, final_text):
             """SDK 응답 메시지를 처리하는 내부 헬퍼"""
+            nonlocal tool_text_retry_count
+
             async for msg in client.receive_response():
                 if isinstance(msg, AssistantMessage):
                     for block in msg.content:
@@ -264,6 +279,30 @@ class ClaudeAgentRunner:
                                 event_queue.put(("agent_text", text))
                                 event_queue.put(("status", text))
                                 self._parse_markdown_todos(text, todo_items, event_queue)
+
+                                # 텍스트에서 도구 호출 JSON 감지
+                                if self._detect_text_tool_call(text):
+                                    tool_text_retry_count += 1
+                                    event_queue.put(("status",
+                                        f"⚠️ 도구 호출 JSON이 텍스트로 출력됨 "
+                                        f"(감지 {tool_text_retry_count}/{MAX_TOOL_TEXT_RETRIES})"
+                                    ))
+                                    event_queue.put(("agent_text",
+                                        "⚠️ **도구가 실행되지 않았습니다** — JSON 텍스트 출력 감지. 재시도 중..."
+                                    ))
+                                    if tool_text_retry_count <= MAX_TOOL_TEXT_RETRIES:
+                                        await client.query(
+                                            "⚠️ 방금 도구(Tool)를 호출하지 않고 JSON 텍스트만 출력했습니다. "
+                                            "이것은 실제로 파일을 생성/수정하지 않습니다.\n"
+                                            "반드시 도구를 직접 호출하세요. JSON을 텍스트로 출력하지 마세요.\n"
+                                            "예를 들어 파일을 작성하려면 Write 도구를 직접 호출해야 합니다."
+                                        )
+                                        # 재프롬프트 후 응답을 재귀적으로 처리
+                                        tool_counter, last_tool_record, final_text = await _process_response(
+                                            client, event_queue, todo_items,
+                                            tool_counter, last_tool_record, final_text,
+                                        )
+                                        return tool_counter, last_tool_record, final_text
 
                         elif isinstance(block, ToolUseBlock):
                             tool_counter += 1
@@ -470,6 +509,33 @@ class ClaudeAgentRunner:
         else:
             parts = [f"{k}={v}" for k, v in args.items()]
             return ", ".join(parts)
+
+    @staticmethod
+    def _detect_text_tool_call(text: str) -> bool:
+        """TextBlock에서 도구 호출 JSON 패턴을 감지한다.
+
+        로컬 LLM이 도구를 실제로 호출하지 않고 JSON 텍스트만 출력하는 경우를 탐지.
+        예: {"name": "Write", "arguments": {...}} 또는 ```json 블록 내 tool call 구조
+        """
+        # 1) JSON 객체에서 도구명 + arguments/input 패턴 감지
+        if re.search(
+            rf'"name"\s*:\s*"({_TOOL_NAMES_PATTERN})"',
+            text,
+        ) and re.search(r'"(?:arguments|input|parameters)"', text):
+            return True
+
+        # 2) <tool_call> 또는 <function_call> 태그 감지
+        if re.search(r'<(?:tool_call|function_call|tool_use)', text, re.IGNORECASE):
+            return True
+
+        # 3) ``` 코드 블록 안에 tool name + file_path/command 패턴
+        code_block = re.search(r'```(?:json)?\s*\n(.+?)```', text, re.DOTALL)
+        if code_block:
+            block_content = code_block.group(1)
+            if re.search(rf'"(?:name|tool)"\s*:\s*"({_TOOL_NAMES_PATTERN})"', block_content):
+                return True
+
+        return False
 
     def chat(self, prompt: str) -> str:
         """단순 대화 모드 (run과 동일하게 SDK 호출)"""
