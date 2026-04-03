@@ -19,7 +19,11 @@ Ollama, Gemini API, vLLM을 지원하는 멀티 앱 플랫폼입니다.
 | **백엔드 모드 전환** | 사이드바에서 프로바이더 선택 (Ollama/Gemini/vLLM). Ollama는 `auto`/`proxy`/`native` 모드 추가 지원 |
 | **커스텀 룰 자동화** | 워크스페이스 내 `DeepAssist.md`가 있으면 AI 프롬프트에 자동 적용 |
 | **에이전트 도구 시스템** | Claude MCP 서버 및 빌트인 도구(Bash, Read, Write, Edit, Glob 등) 전면 사용 |
-| **FAISS + BM25 하이브리드 RAG** | MarkdownRAG + CodeRAG 통합. 쿼리 기반 DB 자동 선택, 문서/프로젝트별 식별, tree-sitter AST 코드 청킹, 서브 청크 재조립, FAISS(60%)+BM25(40%) 앙상블 |
+| **FAISS + BM25 하이브리드 RAG** | `rag/` 패키지: MarkdownRAG + CodeRAG 통합. 쿼리 기반 DB 자동 선택, 문서/프로젝트별 식별, tree-sitter AST 코드 청킹, 서브 청크 재조립, FAISS(60%)+BM25(40%) 앙상블, 배치 빌드(10K단위), 병렬 인덱스 로드 |
+| **중앙 설정 관리** | `config.py`에서 모든 URL, 포트, 상수를 환경변수 기반으로 통합 관리 |
+| **구조화 로깅** | 모든 모듈에서 `logging` 모듈 사용. `print()` 대신 `logger.info()`/`logger.warning()` |
+| **타입 안전성** | `ProviderConfig`, `CallbackSet` TypedDict로 딕셔너리 설정의 타입 안전성 보장 |
+| **pytest 테스트** | `tests/` 디렉토리에 config, models, session, server, RAG 유틸리티 테스트 포함 |
 | **멀티유저 워크스페이스** | FastAPI 서버가 IP별 독립 워크스페이스를 자동 생성·관리 (24시간 미활성 시 자동 삭제) |
 | **파일 관리 UI** | 워크스페이스 탭에서 파일 업로드·다운로드·생성·편집·삭제 가능 |
 | **자동 계획 수립** | 프롬프트 가로채기 방식(시스템 지시어)으로 `Todo List(Plan) 작성 → 실행` 강제 수행 |
@@ -290,7 +294,7 @@ results = code_rag.retrieve("allocate_block", top_k=4)      # 심볼 검색
 
 ### 테스트 확장
 
-`rag.py`의 `__main__` 섹션에서 `TESTS` 리스트에 항목을 추가하면 됩니다:
+`rag/__main__.py`의 `TESTS` 리스트에 항목을 추가하면 됩니다:
 
 ```python
 TESTS = [
@@ -327,22 +331,39 @@ TESTS = [
 ### 독립 실행
 
 ```bash
-python3 rag.py              # 전체 테스트 (markdown + code)
-python3 rag.py markdown     # 마크다운 RAG만 테스트
-python3 rag.py code         # 코드 RAG만 테스트
+python -m rag               # 전체 테스트 (markdown + code)
+python -m rag markdown      # 마크다운 RAG만 테스트
+python -m rag code          # 코드 RAG만 테스트
+
+# pytest 테스트 스위트 실행
+pytest tests/ -v            # 전체 유닛 테스트
 ```
 
 ---
 
 ## 환경 변수 설정 (.env)
 
-| 변수 | 설명 |
-|------|------|
-| `EMBEDDING_PROVIDER` | 임베딩 프로바이더 (`ollama` 또는 `gemini`) |
-| `OLLAMA_BASE_URL` | Ollama 서버 주소 (기본: `http://localhost:11434`) |
-| `OLLAMA_EMBEDDING_MODEL` | Ollama 임베딩 모델명 (예: `bge-m3:latest`) |
-| `GEMINI_API_KEY` | Gemini API Key |
-| `GEMINI_EMBEDDING_MODEL` | Gemini 임베딩 모델명 (예: `models/text-embedding-004`) |
+모든 설정은 `config.py`에서 환경변수를 로드합니다. `.env` 파일에서 자동 로드됩니다.
+
+| 변수 | 설명 | 기본값 |
+|------|------|--------|
+| `EMBEDDING_PROVIDER` | 임베딩 프로바이더 (`ollama` 또는 `gemini`) | `ollama` |
+| `OLLAMA_BASE_URL` | Ollama 서버 주소 | `http://localhost:11434` |
+| `OLLAMA_EMBEDDING_MODEL` | Ollama 임베딩 모델명 | `bge-m3:latest` |
+| `GEMINI_API_KEY` | Gemini API Key | (없음) |
+| `GEMINI_EMBEDDING_MODEL` | Gemini 임베딩 모델명 | `models/text-embedding-004` |
+| `CODE_EMBEDDING_MODEL` | 코드 전용 임베딩 모델 (미설정 시 기본 모델 사용) | (없음) |
+| `VLLM_BASE_URL` | vLLM 서버 주소 | `http://localhost:8000` |
+| `PROXY_PORT` | claude-code-proxy 포트 | `8082` |
+| `AGENT_MAX_TURNS` | 에이전트 최대 턴 수 | `150` |
+| `DEEPASSIST_MD_MAX_SIZE` | DeepAssist.md 최대 크기 (바이트) | `50000` |
+| `KNOWLEDGE_BASE_DIR` | Knowledge DB 저장 디렉토리 | `~/.deepassist/knowledge` |
+| `FILE_SERVER_URL` | 파일 서버 URL | `http://localhost:8000` |
+| `FILE_SERVER_PORT` | 파일 서버 포트 | `8000` |
+| `CORS_ORIGINS` | CORS 허용 출처 (쉼표 구분) | `http://localhost:8501,http://127.0.0.1:8501` |
+| `MAX_FILE_SIZE_MB` | 단일 파일 최대 크기 (MB) | `100` |
+| `MAX_WORKSPACE_SIZE_MB` | 워크스페이스 전체 최대 크기 (MB) | `100` |
+| `WORKSPACE_EXPIRE_HOURS` | 비활성 워크스페이스 만료 시간 | `24` |
 ### 백엔드 연결 구조
 
 | 프로바이더 | 백엔드 전략 | 프록시 | 연결 흐름 |
@@ -380,14 +401,30 @@ dev_agent/
 │   └── test_mancer/
 │       ├── config.py           # TestMancer APP_CONFIG
 │       └── page.py             # 자체 사이드바/메인 (테스트 특화 UI)
-├── models.py                   # 핵심 데이터 모델 (Task, Plan, ToolCallRecord)
+├── config.py                   # 중앙 설정 (환경변수 기반, .env 자동 로드)
+├── models.py                   # 핵심 데이터 모델 (Task, Plan, ToolCallRecord, TypedDict)
 ├── llm_clients.py              # LLM 클라이언트 (Ollama, Gemini)
-├── backend_strategy.py         # 백엔드 전략 (Direct/Proxy/Native/vLLM 4종)
+├── backend_strategy.py         # 백엔드 전략 (Proxy/Native/vLLM 3종)
 ├── agent.py                    # Claude Agent SDK Runner (전략 위임)
 ├── mcp_server.py               # MCP 서버 (RAG 도구 + 웹 검색)
-├── rag.py                      # FAISS + BM25 하이브리드 RAG (MarkdownRAG + CodeRAG)
+├── rag/                        # FAISS + BM25 하이브리드 RAG 패키지
+│   ├── __init__.py             # 기존 import 호환 + pickle re-export
+│   ├── constants.py            # 정규식, tree-sitter 레지스트리
+│   ├── utils.py                # BM25 전처리, 청크 문맥 추출
+│   ├── base.py                 # BaseRAG (임베딩, FAISS/BM25, 배치 빌드)
+│   ├── markdown.py             # MarkdownRAG (헤더 경계 청킹, 용어 인덱스)
+│   ├── code.py                 # CodeRAG (tree-sitter AST, 5종 인덱스, 병렬 로드)
+│   └── __main__.py             # 테스트 실행기 (python -m rag)
 ├── server.py                   # FastAPI 파일/워크스페이스 관리 서버
+├── tests/                      # pytest 테스트 스위트
+│   ├── conftest.py             # 공통 fixture
+│   ├── test_config.py          # config.py 테스트
+│   ├── test_models.py          # 데이터 모델 직렬화 테스트
+│   ├── test_session.py         # 세션 네임스페이스 테스트
+│   ├── test_server.py          # FastAPI 엔드포인트 테스트
+│   └── test_rag_utils.py       # RAG 유틸리티 테스트
 ├── .env                        # 환경변수 (API Key, 임베딩 모델 등)
+├── pytest.ini                  # pytest 설정
 ├── start.sh                    # Mac/Linux 실행 스크립트
 ├── nginx.conf                  # Nginx 리버스 프록시 설정
 ├── requirements.txt
@@ -442,7 +479,7 @@ dev_agent/
 └───────────────────────────────────────┼────────────────────────────────────┘
                                         ↓
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ RAG Engine (rag.py)                                                          │
+│ RAG Engine (rag/ package)                                                    │
 │                                                                              │
 │  ┌─ BaseRAG ──────────────────────────────────────────────────────────────┐  │
 │  │  _init_embeddings (Ollama / Gemini)                                    │  │

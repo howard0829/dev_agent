@@ -1,20 +1,43 @@
+import logging
 import os
 import re
 import sys
 import hashlib
 import pickle
-from typing import List
+from typing import Dict, List, Optional
 
 # 상위 폴더(Dev_Agent) 모듈 참조 보장을 위해 PYTHONPATH 추가
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from mcp.server.fastmcp import FastMCP
 from langchain_core.documents import Document
-from rag import MarkdownRAG, CodeRAG
+from rag import MarkdownRAG, CodeRAG, BaseRAG
+from config import KNOWLEDGE_BASE_DIR
+
+logger = logging.getLogger(__name__)
 
 # MCP 서버 초기화
 # 향후 여기에 추가하고 싶은 도구를 @mcp.tool() 데코레이터와 함께 정의하면 자동으로 Claude에 연동됩니다.
 mcp = FastMCP("DeepAssist_MCP_Server")
+
+# RAG 인스턴스 글로벌 캐시 (동일 DB를 반복 로드하지 않도록)
+_rag_cache: Dict[str, BaseRAG] = {}
+
+
+def _safe_pickle_load(path: str) -> dict:
+    """pickle 파일을 안전하게 로드한다.
+
+    파일이 없거나 손상된 경우 빈 딕셔너리를 반환한다.
+    """
+    try:
+        with open(path, "rb") as f:
+            return pickle.load(f)
+    except (FileNotFoundError, pickle.UnpicklingError, EOFError, ModuleNotFoundError) as e:
+        logger.warning(f"pickle 로드 실패 ({path}): {e}")
+        return {}
+    except Exception as e:
+        logger.warning(f"pickle 로드 중 예상치 못한 오류 ({path}): {e}")
+        return {}
 
 # ──────────────────────────────────────────────
 # 내부 헬퍼 함수
@@ -98,8 +121,14 @@ def _load_and_search(db_path: str, query: str, top_k: int) -> List[Document]:
     """단일 DB를 로드하고 검색 결과를 반환한다. DB가 없으면 빈 리스트 반환.
 
     DB 유형(MarkdownRAG/CodeRAG)을 자동 감지하여 적절한 클래스로 로드한다.
+    글로벌 캐시를 사용하여 동일 DB 반복 로드를 방지한다.
     """
     db_path = os.path.abspath(os.path.expanduser(db_path))
+
+    # 캐시 히트
+    if db_path in _rag_cache:
+        return _rag_cache[db_path].retrieve(query, top_k=top_k)
+
     rag_type = _detect_rag_type(db_path)
 
     if rag_type == "code":
@@ -110,6 +139,7 @@ def _load_and_search(db_path: str, query: str, top_k: int) -> List[Document]:
     if not rag.is_db_exists():
         return []
     rag.load_db()
+    _rag_cache[db_path] = rag
     return rag.retrieve(query, top_k=top_k)
 
 
@@ -203,7 +233,7 @@ def build_knowledge_db(source_path: str, db_path: str = "", force_rebuild: bool 
 
 def _get_knowledge_base_dir() -> str:
     """knowledge DB 기본 저장 디렉토리를 반환한다."""
-    return os.path.expanduser("~/.deepassist/knowledge")
+    return KNOWLEDGE_BASE_DIR
 
 
 def _keyword_in_query(kw: str, query_lower: str) -> bool:
@@ -332,25 +362,17 @@ def _list_all_dbs() -> List[dict]:
         # CodeRAG DB인지 확인
         project_meta_path = os.path.join(db_path, "project_meta.pkl")
         if os.path.exists(project_meta_path):
-            try:
-                with open(project_meta_path, "rb") as f:
-                    meta = pickle.load(f)
-                db_info["type"] = "code"
-                db_info["name"] = meta.get("project_name", entry)
-                db_info["project_root"] = meta.get("project_root", "")
-            except Exception:
-                db_info["type"] = "code"
+            meta = _safe_pickle_load(project_meta_path)
+            db_info["type"] = "code"
+            db_info["name"] = meta.get("project_name", entry)
+            db_info["project_root"] = meta.get("project_root", "")
 
         # MarkdownRAG DB인지 확인
         doc_meta_path = os.path.join(db_path, "doc_meta.pkl")
         if os.path.exists(doc_meta_path):
-            try:
-                with open(doc_meta_path, "rb") as f:
-                    meta = pickle.load(f)
-                db_info["type"] = "markdown"
-                db_info["name"] = meta.get("doc_name", entry)
-            except Exception:
-                db_info["type"] = "markdown"
+            meta = _safe_pickle_load(doc_meta_path)
+            db_info["type"] = "markdown"
+            db_info["name"] = meta.get("doc_name", entry)
 
         dbs.append(db_info)
 

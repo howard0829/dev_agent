@@ -19,14 +19,11 @@ langchain-ollama>=0.2.0,<1.0.0
 ollama>=0.4.4,<1.0.0
 
 # Vector Stores & Retrieval
-faiss-cpu>=1.7.4
-rank_bm25>=0.2.2
-
-# PDF Loader
-pypdf>=4.0.0
+faiss-cpu>=1.7.4,<2.0.0
+rank_bm25>=0.2.2,<1.0.0
 
 # Embeddings & Transformers
-sentence-transformers>=2.2.2
+sentence-transformers>=2.2.2,<4.0.0
 transformers>=4.30.0,<5.0.0
 torch==2.5.1
 
@@ -42,20 +39,20 @@ python-multipart>=0.0.9,<1.0.0
 httpx>=0.27.0,<1.0.0
 
 # Claude Agent SDK (Python 3.10+, 선택 설치 — 미설치 시 Ollama/Gemini만 사용)
-claude-agent-sdk>=0.1.50
-mcp>=1.0.0
+claude-agent-sdk>=0.1.50,<0.2.0
+mcp>=1.0.0,<2.0.0
 
 # LLM Proxy (Claude API → Ollama/OpenRouter/Gemini/vLLM 변환)
-claude-code-proxy>=0.1.0
+claude-code-proxy>=0.1.0,<0.2.0
 
 # Web Search MCP
-duckduckgo-search>=6.0.0
-beautifulsoup4>=4.12.0
+duckduckgo-search>=6.0.0,<8.0.0
+beautifulsoup4>=4.12.0,<5.0.0
 
 # Code RAG — tree-sitter AST 파싱 (선택적 — 미설치 시 regex 폴백)
 # 정확한 함수/클래스 경계 감지를 위해 설치를 권장합니다.
-tree-sitter>=0.23.0
-tree-sitter-python>=0.23.0
-tree-sitter-c>=0.23.0
-tree-sitter-cpp>=0.23.0
-tree-sitter-java>=0.23.0
+tree-sitter>=0.23.0,<1.0.0
+tree-sitter-python>=0.23.0,<1.0.0
+tree-sitter-c>=0.23.0,<1.0.0
+tree-sitter-cpp>=0.23.0,<1.0.0
+tree-sitter-java>=0.23.0,<1.0.0

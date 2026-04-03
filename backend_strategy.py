@@ -3,6 +3,7 @@
 claude-code-proxy 경유, Ollama Native Anthropic API, vLLM 3종을 지원한다.
 """
 
+import logging
 import os
 import re
 import time
@@ -12,6 +13,13 @@ from abc import ABC, abstractmethod
 from typing import Optional
 
 import requests
+
+from config import (
+    OLLAMA_DEFAULT_URL, VLLM_DEFAULT_URL,
+    PROXY_PORT, PROXY_MAX_WAIT,
+)
+
+logger = logging.getLogger(__name__)
 
 
 # ──────────────────────────────────────────────
@@ -42,10 +50,9 @@ class BackendStrategy(ABC):
 # 1) claude-code-proxy 경유 (Ollama/Gemini)
 # ──────────────────────────────────────────────
 
-# 프록시 기동 대기 최대 시간(초)
-_PROXY_MAX_WAIT = 15
-# claude-code-proxy 기본 포트
-_PROXY_PORT = 8082
+# config.py에서 가져옴
+_PROXY_MAX_WAIT = PROXY_MAX_WAIT
+_PROXY_PORT = PROXY_PORT
 
 
 class ProxyStrategy(BackendStrategy):
@@ -62,12 +69,12 @@ class ProxyStrategy(BackendStrategy):
         llm_provider: str,
         model: str,
         api_key: str = "",
-        ollama_url: str = "http://localhost:11434",
+        ollama_url: str = "",
     ):
         self.llm_provider = llm_provider
         self.model = model
         self.api_key = api_key
-        self.ollama_url = ollama_url
+        self.ollama_url = ollama_url or OLLAMA_DEFAULT_URL
 
         self._proxy_process: Optional[subprocess.Popen] = None
         self._log_path: Optional[str] = None
@@ -143,13 +150,20 @@ class ProxyStrategy(BackendStrategy):
     def cleanup(self, event_queue) -> None:
         if self._proxy_process:
             self._proxy_process.terminate()
-            self._proxy_process = None
+            try:
+                self._proxy_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._proxy_process.kill()
+                self._proxy_process.wait(timeout=3)
+            finally:
+                self._proxy_process = None
 
         if self._log_file:
             try:
                 self._log_file.close()
             except Exception:
                 pass
+            self._log_file = None
 
         _safe_unlink(self._log_path)
 
@@ -205,9 +219,9 @@ class OllamaNativeStrategy(BackendStrategy):
     Ollama가 /v1/messages 엔드포인트에서 Anthropic Messages API를 직접 처리한다.
     """
 
-    def __init__(self, model: str, ollama_url: str = "http://localhost:11434"):
+    def __init__(self, model: str, ollama_url: str = ""):
         self.model = model
-        self.ollama_url = ollama_url.rstrip("/")
+        self.ollama_url = (ollama_url or OLLAMA_DEFAULT_URL).rstrip("/")
 
     def check(self) -> tuple[bool, str]:
         # 1) Ollama 서버 접근성 + 모델 확인
@@ -270,7 +284,7 @@ class VllmStrategy(ProxyStrategy):
     def __init__(
         self,
         model: str,
-        vllm_url: str = "http://localhost:8000",
+        vllm_url: str = "",
         api_key: str = "",
     ):
         super().__init__(
@@ -278,7 +292,7 @@ class VllmStrategy(ProxyStrategy):
             model=model,
             api_key=api_key,
         )
-        self.vllm_url = vllm_url.rstrip("/")
+        self.vllm_url = (vllm_url or VLLM_DEFAULT_URL).rstrip("/")
 
     # ── check ──
 
@@ -359,8 +373,8 @@ def select_strategy(
     backend_mode: str,
     model: str,
     api_key: str = "",
-    ollama_url: str = "http://localhost:11434",
-    vllm_url: str = "http://localhost:8000",
+    ollama_url: str = "",
+    vllm_url: str = "",
 ) -> BackendStrategy:
     """프로바이더와 백엔드 모드에 따라 적절한 전략을 선택하여 반환한다.
 
@@ -425,6 +439,7 @@ def _check_ollama(ollama_url: str, model: str) -> tuple[bool, str]:
     except requests.ConnectionError:
         return False, f"Ollama 서버({base})에 연결할 수 없습니다. 'ollama serve' 실행 여부를 확인하세요."
     except Exception as e:
+        logger.exception("Ollama 연결 확인 중 오류")
         return False, f"Ollama 연결 확인 중 오류: {e}"
 
 
@@ -454,7 +469,7 @@ def _detect_dropped_params(log_path: str) -> str:
                             if p:
                                 dropped_params.add(p)
     except Exception:
-        pass
+        logger.debug("프록시 로그 파싱 중 오류", exc_info=True)
     return ", ".join(sorted(dropped_params))
 
 

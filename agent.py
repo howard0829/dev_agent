@@ -3,6 +3,7 @@ DeepAssist - Claude Agent SDK Runner
 Claude Agent SDK 기반 자율 코딩 에이전트
 """
 
+import logging
 import os
 import json
 import re
@@ -11,6 +12,12 @@ from typing import Dict, List, Optional, Callable
 
 from models import Task, Plan, ToolCallRecord
 from backend_strategy import select_strategy, BackendStrategy
+from config import (
+    OLLAMA_DEFAULT_URL, VLLM_DEFAULT_URL,
+    AGENT_MAX_TURNS, DEEPASSIST_MD_MAX_SIZE,
+)
+
+logger = logging.getLogger(__name__)
 
 try:
     from claude_agent_sdk import (
@@ -51,7 +58,7 @@ class ClaudeAgentRunner:
         ollama_url: str = None,
         vllm_url: str = None,
         working_dir: str = ".",
-        max_turns: int = 150,
+        max_turns: int = AGENT_MAX_TURNS,
         on_status: Callable = None,
         on_tool_call: Callable = None,
         on_plan_update: Callable = None,
@@ -60,8 +67,8 @@ class ClaudeAgentRunner:
         self.llm_provider = llm_provider
         self.api_key = api_key
         self.model = model
-        self.ollama_url = ollama_url or "http://localhost:11434"
-        self.vllm_url = vllm_url or "http://localhost:8000"
+        self.ollama_url = ollama_url or OLLAMA_DEFAULT_URL
+        self.vllm_url = vllm_url or VLLM_DEFAULT_URL
         self.working_dir = os.path.abspath(working_dir)
         self.max_turns = max_turns
         self.backend_mode = backend_mode
@@ -104,7 +111,8 @@ class ClaudeAgentRunner:
         import threading
         import queue as queue_mod
 
-        result_queue = queue_mod.Queue()
+        result_queue: queue_mod.Queue = queue_mod.Queue()
+        done_event = threading.Event()
 
         def _thread_target():
             loop = asyncio.new_event_loop()
@@ -115,17 +123,19 @@ class ClaudeAgentRunner:
                 )
                 result_queue.put(("__FINAL__", result))
             except Exception as e:
+                logger.exception("에이전트 비동기 실행 중 오류")
                 result_queue.put(("__ERROR__", str(e)))
             finally:
                 loop.close()
+                done_event.set()
 
         t = threading.Thread(target=_thread_target, daemon=True)
         t.start()
 
         final_result = ""
-        while True:
+        while not done_event.is_set() or not result_queue.empty():
             try:
-                event_type, data = result_queue.get(timeout=0.2)
+                event_type, data = result_queue.get(timeout=0.1)
                 if event_type == "__FINAL__":
                     final_result = data
                     break
@@ -139,8 +149,7 @@ class ClaudeAgentRunner:
                 elif event_type == "todo_update":
                     self.on_todo_update(data)
             except queue_mod.Empty:
-                if not t.is_alive():
-                    break
+                continue
 
         t.join(timeout=5)
         return final_result
@@ -171,14 +180,20 @@ class ClaudeAgentRunner:
             "3. Before Write or Edit, you MUST call Read on that path first.\n"
         )
 
-        # DeepAssist.md 자동 로드
+        # DeepAssist.md 자동 로드 (크기 제한 적용)
         md_path = os.path.join(wd, "DeepAssist.md")
         if os.path.exists(md_path):
             try:
-                with open(md_path, "r", encoding="utf-8") as f:
-                    system_prompt += f"\n## PROJECT GUIDELINES\n{f.read()}"
-            except Exception:
-                pass
+                file_size = os.path.getsize(md_path)
+                if file_size > DEEPASSIST_MD_MAX_SIZE:
+                    logger.warning(
+                        f"DeepAssist.md 크기({file_size}B)가 제한({DEEPASSIST_MD_MAX_SIZE}B)을 초과하여 건너뜁니다."
+                    )
+                else:
+                    with open(md_path, "r", encoding="utf-8") as f:
+                        system_prompt += f"\n## PROJECT GUIDELINES\n{f.read()}"
+            except Exception as e:
+                logger.warning(f"DeepAssist.md 로드 실패: {e}")
 
         # MCP 서버 설정
         mcp_dir = os.path.join(wd, ".claude")
@@ -205,8 +220,9 @@ class ClaudeAgentRunner:
             permission_mode="acceptEdits",
         )
 
-        # UI 표시용 경로
-        _display_wd = wd[wd.find("/workspaces/"):] if "/workspaces/" in wd else wd
+        # UI 표시용 경로 (symlink 해소 후 안전한 경로 추출)
+        real_wd = os.path.realpath(wd)
+        _display_wd = real_wd[real_wd.find("/workspaces/"):] if "/workspaces/" in real_wd else real_wd
         event_queue.put(("status", f"DeepAssist Agent 실행 중... (sandbox: {_display_wd})"))
 
         final_text = ""

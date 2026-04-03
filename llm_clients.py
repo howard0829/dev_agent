@@ -4,11 +4,14 @@ Ollama, Gemini API: 단순 채팅 모드용 클라이언트
 """
 
 import json
+import logging
 import uuid
 from abc import ABC, abstractmethod
 from typing import Dict, Generator, List
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 try:
     from google import genai

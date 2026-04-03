@@ -8,9 +8,11 @@ import os
 import streamlit as st
 
 from core.session import ns, get_state, set_state, display_path
-from models import Plan, ToolCallRecord
+from core.chat_ui import _make_callbacks
+from models import Plan, ToolCallRecord, ProviderConfig, CallbackSet
 from llm_clients import OllamaClient, GeminiClient
 from agent import ClaudeAgentRunner
+from config import OLLAMA_DEFAULT_URL, VLLM_DEFAULT_URL, AGENT_MAX_TURNS
 
 
 # ──────────────────────────────────────────────
@@ -66,13 +68,13 @@ def render_sidebar(prefix: str) -> dict:
     )
 
     api_key = ""
-    ollama_url = "http://localhost:11434"
-    vllm_url = "http://localhost:8000"
+    ollama_url = OLLAMA_DEFAULT_URL
+    vllm_url = VLLM_DEFAULT_URL
     model_name = ""
 
     if llm_provider == "Ollama":
         ollama_url = st.text_input(
-            "Ollama URL", value="http://localhost:11434",
+            "Ollama URL", value=OLLAMA_DEFAULT_URL,
             key=f"{prefix}_ollama_url",
         )
         model_name = st.text_input(
@@ -92,7 +94,7 @@ def render_sidebar(prefix: str) -> dict:
         )
     else:  # vLLM
         vllm_url = st.text_input(
-            "vLLM 서버 URL", value="http://localhost:8000",
+            "vLLM 서버 URL", value=VLLM_DEFAULT_URL,
             key=f"{prefix}_vllm_url",
         )
         model_name = st.text_input(
@@ -316,13 +318,13 @@ def _render_test_results(prefix: str):
 # 에이전트 생성
 # ──────────────────────────────────────────────
 
-def _create_agent(prefix: str, sidebar_cfg: dict, callbacks: dict):
+def _create_agent(prefix: str, sidebar_cfg: ProviderConfig, callbacks: CallbackSet):
     """TestMancer 에이전트 인스턴스 생성"""
     llm_provider = sidebar_cfg["llm_provider"]
     api_key = sidebar_cfg["api_key"]
     model_name = sidebar_cfg["model_name"]
     ollama_url = sidebar_cfg["ollama_url"]
-    vllm_url = sidebar_cfg.get("vllm_url", "http://localhost:8000")
+    vllm_url = sidebar_cfg.get("vllm_url", VLLM_DEFAULT_URL)
     working_dir = get_state(prefix, "working_dir", os.path.expanduser("~"))
 
     runner = ClaudeAgentRunner(
@@ -331,7 +333,7 @@ def _create_agent(prefix: str, sidebar_cfg: dict, callbacks: dict):
         model=model_name,
         ollama_url=ollama_url if llm_provider == "Ollama" else None,
         vllm_url=vllm_url if llm_provider == "vLLM" else None,
-        max_turns=150,
+        max_turns=AGENT_MAX_TURNS,
         working_dir=working_dir,
         on_status=callbacks["on_status"],
         on_tool_call=callbacks["on_tool_call"],
@@ -339,72 +341,3 @@ def _create_agent(prefix: str, sidebar_cfg: dict, callbacks: dict):
     )
     runner.on_todo_update = callbacks["on_todo_update"]
     return runner
-
-
-# ──────────────────────────────────────────────
-# 콜백 팩토리
-# ──────────────────────────────────────────────
-
-def _make_callbacks(prefix: str, todo_placeholder, status_log_placeholder):
-    """TestMancer 전용 콜백 세트 생성"""
-
-    def _update_todo_ui():
-        with todo_placeholder.container():
-            items = get_state(prefix, "todo_items", [])
-            if items:
-                total = len(items)
-                done = sum(1 for t in items if t["status"] == "completed")
-                st.markdown(f"### 📋 Todo ({done}/{total})")
-                st.progress(done / total if total > 0 else 0)
-                for t in items:
-                    status = t.get("status", "pending")
-                    icon = {"completed": "✅", "in_progress": "🔄"}.get(status, "⬜")
-                    st.markdown(f"{icon} {t['text']}")
-
-    def _update_status_log_ui():
-        with status_log_placeholder.container():
-            st.markdown("### 📊 실행 로그")
-            log = get_state(prefix, "status_log", [])
-            if log:
-                with st.container(height=500):
-                    st.code("\n".join(log), language="text")
-            else:
-                st.caption("실행 로그가 없습니다.")
-
-    def on_status(msg: str):
-        log = get_state(prefix, "status_log", [])
-        log.append(msg)
-        set_state(prefix, "status_log", log)
-        _update_status_log_ui()
-
-    def on_todo_update(items: list):
-        set_state(prefix, "todo_items", items)
-        _update_todo_ui()
-
-    def on_tool_call(record: ToolCallRecord):
-        tool_log = get_state(prefix, "tool_log", [])
-        tool_log.append({
-            "name": record.tool_name,
-            "args": record.arguments,
-            "result": record.result,
-            "time": record.timestamp,
-        })
-        set_state(prefix, "tool_log", tool_log)
-
-    def on_plan_update(plan: Plan):
-        set_state(prefix, "current_plan", {
-            "goal": plan.goal,
-            "tasks": [
-                {"id": t.id, "desc": t.description, "status": t.status, "result": t.result}
-                for t in plan.tasks
-            ],
-        })
-
-    return {
-        "on_status": on_status,
-        "on_todo_update": on_todo_update,
-        "on_tool_call": on_tool_call,
-        "on_plan_update": on_plan_update,
-        "update_todo_ui": _update_todo_ui,
-        "update_status_log_ui": _update_status_log_ui,
-    }

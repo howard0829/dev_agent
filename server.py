@@ -11,6 +11,7 @@ DeepAssist - FastAPI 파일/워크스페이스 관리 서버
 에이전트 실행은 app.py(Streamlit)에서 직접 처리합니다.
 """
 
+import logging
 import os
 import shutil
 import hashlib
@@ -22,19 +23,20 @@ from fastapi import FastAPI, File, UploadFile, Request, HTTPException
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+from config import (
+    WORKSPACES_ROOT as _WORKSPACES_ROOT_STR,
+    MAX_FILE_SIZE_MB, MAX_WORKSPACE_SIZE_MB,
+    WORKSPACE_EXPIRE_HOURS, CLEANUP_INTERVAL_MINUTES,
+    ALLOWED_EXTENSIONS, CORS_ORIGINS,
+    FILE_SERVER_PORT,
+)
+
+logger = logging.getLogger(__name__)
+
 # ──────────────────────────────────────────────
-# 설정 (이 영역에서 서버 동작을 제어합니다)
+# 설정 (config.py에서 로드)
 # ──────────────────────────────────────────────
-WORKSPACES_ROOT = Path("./workspaces")           # 워크스페이스 루트 경로
-MAX_FILE_SIZE_MB = 100                            # 단일 파일 최대 크기 (MB)
-MAX_WORKSPACE_SIZE_MB = 100                       # 워크스페이스별 최대 용량 (MB)
-WORKSPACE_EXPIRE_HOURS = 24                       # 비활성 워크스페이스 만료 시간 (시간)
-CLEANUP_INTERVAL_MINUTES = 30                     # 자동 정리 실행 주기 (분)
-ALLOWED_EXTENSIONS = {
-    ".md", ".txt", ".py", ".json", ".yaml", ".yml",
-    ".csv", ".html", ".js", ".ts", ".sh", ".env",
-    ".toml", ".ini", ".cfg", ".log"
-}
+WORKSPACES_ROOT = Path(_WORKSPACES_ROOT_STR)
 
 
 # ──────────────────────────────────────────────
@@ -59,12 +61,12 @@ def cleanup_expired_workspaces():
             try:
                 shutil.rmtree(folder)
                 deleted_count += 1
-                print(f"🗑️ 만료된 워크스페이스 삭제: {folder.name} (마지막 수정: {mtime.strftime('%Y-%m-%d %H:%M')})")
+                logger.info(f"🗑️ 만료된 워크스페이스 삭제: {folder.name} (마지막 수정: {mtime.strftime('%Y-%m-%d %H:%M')})")
             except Exception as e:
-                print(f"⚠️ 워크스페이스 삭제 실패: {folder.name} - {e}")
+                logger.warning(f"⚠️ 워크스페이스 삭제 실패: {folder.name} - {e}")
 
     if deleted_count > 0:
-        print(f"✅ 총 {deleted_count}개의 만료 워크스페이스 정리 완료")
+        logger.info(f"✅ 총 {deleted_count}개의 만료 워크스페이스 정리 완료")
 
 
 @asynccontextmanager
@@ -92,10 +94,10 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS: Streamlit(8501)에서 FastAPI(8000)로의 요청 허용
+# CORS: Streamlit에서 FastAPI로의 요청 허용 (환경변수로 설정 가능)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8501", "http://127.0.0.1:8501"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -139,9 +141,18 @@ def get_workspace_size(workspace: Path) -> int:
 
 
 def is_safe_path(workspace: Path, target: Path) -> bool:
-    """경로 탈출(Path Traversal) 공격 방지: workspace 하위인지 검증"""
+    """경로 탈출(Path Traversal) 공격 방지: workspace 하위인지 검증.
+
+    symlink를 해소(resolve)한 뒤 실제 경로가 workspace 내부인지 확인한다.
+    """
     try:
-        target.resolve().relative_to(workspace.resolve())
+        resolved_target = target.resolve()
+        resolved_workspace = workspace.resolve()
+        resolved_target.relative_to(resolved_workspace)
+        # symlink가 workspace 외부를 가리키면 차단
+        if target.is_symlink():
+            link_target = target.resolve()
+            link_target.relative_to(resolved_workspace)
         return True
     except ValueError:
         return False
@@ -403,9 +414,10 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
+    logging.basicConfig(level=logging.INFO)
     WORKSPACES_ROOT.mkdir(exist_ok=True)
-    print("🚀 DeepAssist File Server 시작 중...")
-    print(f"   워크스페이스 루트: {WORKSPACES_ROOT.resolve()}")
-    print(f"   워크스페이스 쿼터: {MAX_WORKSPACE_SIZE_MB}MB / 만료: {WORKSPACE_EXPIRE_HOURS}시간")
-    print("   API 문서: http://localhost:8000/docs")
-    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
+    logger.info("🚀 DeepAssist File Server 시작 중...")
+    logger.info(f"   워크스페이스 루트: {WORKSPACES_ROOT.resolve()}")
+    logger.info(f"   워크스페이스 쿼터: {MAX_WORKSPACE_SIZE_MB}MB / 만료: {WORKSPACE_EXPIRE_HOURS}시간")
+    logger.info(f"   API 문서: http://localhost:{FILE_SERVER_PORT}/docs")
+    uvicorn.run("server:app", host="0.0.0.0", port=FILE_SERVER_PORT, reload=True)

@@ -9,8 +9,7 @@ import httpx
 import streamlit as st
 
 from core.session import ns, get_state, set_state
-
-FILE_SERVER_URL = os.getenv("FILE_SERVER_URL", "http://localhost:8000")
+from config import FILE_SERVER_URL
 
 
 def render_workspace_tab(prefix: str):

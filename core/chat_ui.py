@@ -7,17 +7,18 @@ import os
 import datetime
 import streamlit as st
 
-from models import Plan, ToolCallRecord
+from models import Plan, ToolCallRecord, ProviderConfig, CallbackSet
 from llm_clients import OllamaClient, GeminiClient
 from agent import ClaudeAgentRunner
 from core.session import ns, get_state, set_state
+from config import VLLM_DEFAULT_URL, AGENT_MAX_TURNS
 
 
 # ──────────────────────────────────────────────
 # 콜백 팩토리
 # ──────────────────────────────────────────────
 
-def _make_callbacks(prefix: str, todo_placeholder, status_log_placeholder):
+def _make_callbacks(prefix: str, todo_placeholder, status_log_placeholder) -> CallbackSet:
     """앱별 네임스페이스 콜백 함수 세트를 생성하여 반환"""
 
     def _update_todo_ui():
@@ -61,24 +62,11 @@ def _make_callbacks(prefix: str, todo_placeholder, status_log_placeholder):
 
     def on_tool_call(record: ToolCallRecord):
         tool_log = get_state(prefix, "tool_log", [])
-        tool_log.append({
-            "name": record.tool_name,
-            "args": record.arguments,
-            "result": record.result,
-            "time": record.timestamp,
-        })
+        tool_log.append(record.to_dict())
         set_state(prefix, "tool_log", tool_log)
 
     def on_plan_update(plan: Plan):
-        set_state(prefix, "current_plan", {
-            "goal": plan.goal,
-            "tasks": [
-                {"id": t.id, "desc": t.description, "status": t.status, "result": t.result}
-                for t in plan.tasks
-            ],
-            "verified": plan.verified,
-            "attempt": plan.attempt,
-        })
+        set_state(prefix, "current_plan", plan.to_dict())
 
     return {
         "on_status": on_status,
@@ -94,13 +82,13 @@ def _make_callbacks(prefix: str, todo_placeholder, status_log_placeholder):
 # 에이전트 생성
 # ──────────────────────────────────────────────
 
-def _get_agent(prefix: str, provider_cfg: dict, callbacks: dict, is_agent_mode: bool):
+def _get_agent(prefix: str, provider_cfg: ProviderConfig, callbacks: CallbackSet, is_agent_mode: bool):
     """프로바이더 설정에 따라 에이전트/클라이언트 인스턴스를 생성하여 반환"""
     llm_provider = provider_cfg["llm_provider"]
     model_name = provider_cfg["model_name"]
     api_key = provider_cfg["api_key"]
     ollama_url = provider_cfg["ollama_url"]
-    vllm_url = provider_cfg.get("vllm_url", "http://localhost:8000")
+    vllm_url = provider_cfg.get("vllm_url", VLLM_DEFAULT_URL)
     backend_mode = provider_cfg.get("backend_mode", "auto")
     working_dir = get_state(prefix, "working_dir", os.path.expanduser("~"))
 
@@ -111,7 +99,7 @@ def _get_agent(prefix: str, provider_cfg: dict, callbacks: dict, is_agent_mode: 
             model=model_name,
             ollama_url=ollama_url if llm_provider == "Ollama" else None,
             vllm_url=vllm_url if llm_provider == "vLLM" else None,
-            max_turns=150,
+            max_turns=AGENT_MAX_TURNS,
             working_dir=working_dir,
             on_status=callbacks["on_status"],
             on_tool_call=callbacks["on_tool_call"],
@@ -134,7 +122,7 @@ def _get_agent(prefix: str, provider_cfg: dict, callbacks: dict, is_agent_mode: 
                 model=model_name,
                 vllm_url=vllm_url if llm_provider == "vLLM" else None,
                 working_dir=working_dir,
-                max_turns=150,
+                max_turns=AGENT_MAX_TURNS,
             )
 
 
@@ -142,7 +130,7 @@ def _get_agent(prefix: str, provider_cfg: dict, callbacks: dict, is_agent_mode: 
 # 채팅 탭 렌더링
 # ──────────────────────────────────────────────
 
-def render_chat_tab(prefix: str, provider_cfg: dict):
+def render_chat_tab(prefix: str, provider_cfg: ProviderConfig):
     """채팅 탭 전체를 렌더링합니다."""
 
     # 2컬럼 레이아웃: 채팅 + 상태 패널

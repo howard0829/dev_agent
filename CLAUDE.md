@@ -29,8 +29,19 @@ Ollama(로컬 LLM), Gemini API, vLLM을 지원하며, 여러 앱(DeepAssist, Tes
   - **`core/sidebar.py`**: LLM 프로바이더 선택 UI. `render_llm_sidebar()` → 설정 dict 반환 (`llm_provider`, `model_name`, `api_key`, `ollama_url`, `vllm_url`, `enable_thinking`, `agent_mode`, `backend_mode`). vLLM 이외 프로바이더에서 백엔드 모드 선택 UI(`auto`/`proxy`/`native`) 표시. vLLM 선택 시 서버 URL과 모델명 입력 UI 표시. 앱이 사이드바를 자체 구현할 경우 사용하지 않아도 됨
   - **`core/chat_ui.py`**: 채팅 탭 공통 로직. `render_chat_tab(prefix, provider_cfg)`. 앱이 채팅 UI를 자체 구현할 경우 사용하지 않아도 됨
   - **`core/workspace_ui.py`**: 워크스페이스 파일 관리 탭. `render_workspace_tab(prefix)`. `httpx`를 통해 FastAPI 서버(`server.py`)와 통신
+- **`config.py`**: 중앙 설정 모듈 (환경변수 기반)
+  - 모든 URL, 포트, 상수를 환경변수에서 로드. `.env` 파일 자동 로드
+  - LLM 기본값: `OLLAMA_DEFAULT_URL`, `VLLM_DEFAULT_URL`, `OLLAMA_DEFAULT_MODEL`, `VLLM_DEFAULT_MODEL`, `GEMINI_DEFAULT_MODEL`
+  - 임베딩: `EMBEDDING_PROVIDER`, `OLLAMA_EMBEDDING_MODEL`, `GEMINI_EMBEDDING_MODEL`, `GEMINI_API_KEY`, `CODE_EMBEDDING_MODEL`
+  - 프록시: `PROXY_PORT`, `PROXY_MAX_WAIT`
+  - 서버: `FILE_SERVER_URL`, `FILE_SERVER_PORT`, `WORKSPACES_ROOT`, `MAX_FILE_SIZE_MB`, `MAX_WORKSPACE_SIZE_MB`, `WORKSPACE_EXPIRE_HOURS`, `CLEANUP_INTERVAL_MINUTES`, `ALLOWED_EXTENSIONS`
+  - CORS: `CORS_ORIGINS`
+  - 에이전트: `AGENT_MAX_TURNS`, `DEEPASSIST_MD_MAX_SIZE`
+  - Knowledge: `KNOWLEDGE_BASE_DIR`
 - **`models.py`**: 핵심 데이터 모델
-  - `Task`, `Plan`, `ToolCallRecord` 데이터클래스
+  - `Task`, `Plan`, `ToolCallRecord` 데이터클래스 (`to_dict()` 직렬화 메서드 포함)
+  - `ProviderConfig` TypedDict: LLM 프로바이더 설정 딕셔너리 타입
+  - `CallbackSet` TypedDict: 콜백 함수 세트 타입
 - **`llm_clients.py`**: LLM 클라이언트 (단순 채팅 모드용)
   - `BaseLLMClient` 추상 클래스, `OllamaClient`, `GeminiClient`
 - **`backend_strategy.py`**: 백엔드 전략 모듈 (Strategy 패턴)
@@ -44,9 +55,12 @@ Ollama(로컬 LLM), Gemini API, vLLM을 지원하며, 여러 앱(DeepAssist, Tes
   - `ClaudeAgentRunner` 클래스: SDK 기반으로 구동되며 `on_status`/`on_tool_call` 콜백으로 UI와 연동
   - **백엔드 전략 위임**: `backend_mode` 파라미터(`auto`/`proxy`/`native`)로 `backend_strategy.py`의 전략을 선택. `_async_run()`에서 `strategy.activate()` → SDK 호출 → `strategy.cleanup()` 순서로 실행
   - `ALLOWED_TOOLS`: SDK에 전달할 허용 도구 목록
-  - **자동 룰 로더**: 작업 디렉토리에 `DeepAssist.md` 파일이 존재하면 시스템 프롬프트에 자동 주입
+  - **자동 룰 로더**: 작업 디렉토리에 `DeepAssist.md` 파일이 존재하면 시스템 프롬프트에 자동 주입 (`DEEPASSIST_MD_MAX_SIZE` 크기 제한 적용)
+  - `threading.Event` 기반 이벤트 루프 (Queue 폴링 대신 효율적 동기화)
 - **`mcp_server.py`**: MCP(Model Context Protocol) 서버
-  - `FastMCP`를 사용하여 작성, `rag.py`를 감싸서 RAG 도구를 제공
+  - `FastMCP`를 사용하여 작성, `rag/` 패키지를 감싸서 RAG 도구를 제공
+  - **RAG 인스턴스 캐시**: `_rag_cache` 딕셔너리로 DB별 RAG 인스턴스 재사용
+  - **안전한 pickle 로드**: `_safe_pickle_load()` 함수로 역직렬화 오류 안전 처리
   - **MCP 도구 3종**:
     - `list_knowledge_dbs`: 구축된 전체 DB 목록 조회 (유형/이름/경로)
     - `search_knowledge`: 하이브리드 검색 (db_path 미지정 시 쿼리 기반 DB 자동 선택)
@@ -59,46 +73,41 @@ Ollama(로컬 LLM), Gemini API, vLLM을 지원하며, 여러 앱(DeepAssist, Tes
     - `_keyword_in_query`: ASCII 영숫자 경계 검사로 서브스트링 오매칭 방지
   - **소스 유형 자동 감지** (`_detect_source_type`, `_detect_rag_type`): 파일 확장자/DB 인덱스로 MarkdownRAG vs CodeRAG 자동 판별
   - 새로운 도구를 추가하려면 `@mcp.tool()` 함수를 추가
-- **`rag.py`**: FAISS + BM25 하이브리드 RAG 모듈 (마크다운 + 소스코드 통합)
+- **`rag/`**: FAISS + BM25 하이브리드 RAG 패키지 (마크다운 + 소스코드 통합)
+  - **`rag/__init__.py`**: 기존 import 호환 (`from rag import MarkdownRAG, CodeRAG, BaseRAG`). pickle 호환을 위해 `bm25_preprocessor`, `code_bm25_preprocessor` re-export
+  - **`rag/constants.py`**: 공통 상수, 정규식 패턴 (`_REQ_ID_RE`, `_HEADER_RE`, `_TABLE_ROW_RE` 등), `_LANGUAGE_CONFIG` tree-sitter 언어 레지스트리, 그래머 캐시 (`_TS_LANGUAGES`, `_TS_PARSERS`)
+  - **`rag/utils.py`**: `bm25_preprocessor` (마크다운 BM25 전처리), `_extract_chunk_context` (2차 분할 시 구조적 문맥 추출)
+  - **`rag/base.py`**: `BaseRAG` 클래스 — 임베딩 초기화 (`config.py`에서 설정 로드, `load_dotenv()` 제거), FAISS/BM25 저장/로드, 앙상블 검색. FAISS 배치 빌드 (10,000개 단위, 대규모 문서셋 메모리 효율 향상)
+  - **`rag/markdown.py`**: `MarkdownRAG` + 마크다운 청킹 유틸리티 (`_find_content_start`, `_split_md_by_header_boundary`). 용어 인덱스, 희귀 용어 직접 검색 + 앙상블 보충
+  - **`rag/code.py`**: `CodeRAG` + `code_bm25_preprocessor` + tree-sitter AST 헬퍼 + regex 폴백. 5종 인덱스, 서브 청크 재조립. `ThreadPoolExecutor`로 5개 pickle 인덱스 병렬 로드
+  - **`rag/__main__.py`**: 테스트 유틸리티 (`python -m rag [markdown|code|all]`)
   - **아키텍처**: `BaseRAG` → `MarkdownRAG` / `CodeRAG` 상속 구조
-  - 임베딩 프로바이더(Ollama/Gemini) 및 모델은 `.env` 파일로 관리
+  - 임베딩 프로바이더(Ollama/Gemini) 및 모델은 `config.py`를 통해 관리
   - **하이브리드 검색**: FAISS(의미론적, 60%) + BM25(키워드, 40%)를 `EnsembleRetriever`로 결합
   - **DB 재사용**: `build_or_load(source_path)` — DB 있으면 즉시 로드, 없으면 새로 구축
-  - **MarkdownRAG** — 마크다운 기술문서 전용:
-    - `doc_name` 파라미터: 문서 식별명 (미지정 시 파일명에서 자동 추출), `doc_meta.pkl`로 DB에 저장
-    - 프론트매터 스킵 (`_find_content_start`): 목차(TOC) 자동 감지 스킵
-    - 구조적 청킹 (`_split_md_by_header_boundary`): 헤더 경계 1차 분할 + 테이블 행 우선 2차 분할
-    - 2차 분할 시 구조적 문맥 주입 (`_extract_chunk_context`): 접두사 + 마크다운 헤더 + 테이블 헤더행+구분선
-    - 용어 인덱스 (`term_index`): Req ID + 약어 자동 추출, 희귀 용어 직접 검색 + 앙상블 보충
-    - BM25 전처리기: Req ID 하이픈 보존 (`TEL-6` → `tel-6`)
-    - DB 구성: `faiss_index/` + `bm25_retriever.pkl` + `term_index.pkl` + `doc_meta.pkl`
-  - **CodeRAG** — 소스코드 전용 (Python/C/C++/Java):
-    - `project_name` 파라미터: 프로젝트 식별명 (미지정 시 폴더명에서 자동 추출), `project_meta.pkl`로 DB에 저장
-    - tree-sitter AST 기반 청킹 (미설치 시 regex 폴백)
-    - Python 데코레이터 인식 (`decorated_definition`): `@test_case("TEL-2")` 등이 함수와 함께 청킹
-    - 3단계 청크 체계: L1 파일 요약, L2 함수/클래스, L3 서브 청크
-    - 서브 청크 재조립 (`_reassemble_subchunks`): `function_id`로 연결된 서브 청크를 합쳐 완전한 함수 반환
-    - 코드 내 Req ID 추출: 하이픈(`TEL-2`) + 언더스코어(`TEL_2` → `TEL-2`) 정규화
-    - 5종 인덱스: `symbol_index`, `req_id_index`, `file_path_index`, `function_id_index`, `file_manifest`
-    - 코드 BM25 전처리기: CamelCase/snake_case 분리 + Req ID 하이픈 보존
-    - DB 구성: `faiss_index/` + `bm25_retriever.pkl` + `symbol_index.pkl` + `req_id_index.pkl` + `file_path_index.pkl` + `function_id_index.pkl` + `file_manifest.pkl` + `project_meta.pkl`
-    - 언어 확장: `_LANGUAGE_CONFIG` 딕셔너리에 한 줄 추가로 새 언어 지원
+  - 언어 확장: `_LANGUAGE_CONFIG` 딕셔너리에 한 줄 추가로 새 언어 지원
 - **`server.py`**: FastAPI 파일/워크스페이스 관리 서버
   - 클라이언트 IP + User-Agent 기반 세션 ID 생성, `workspaces/{session_id}/` 폴더 자동 할당
-  - **주요 설정 상수** (파일 상단):
-    - `MAX_FILE_SIZE_MB = 100`, `MAX_WORKSPACE_SIZE_MB = 100`
-    - `WORKSPACE_EXPIRE_HOURS = 24`, `ALLOWED_EXTENSIONS`
+  - 모든 설정은 `config.py`에서 로드 (`MAX_FILE_SIZE_MB`, `MAX_WORKSPACE_SIZE_MB`, `WORKSPACE_EXPIRE_HOURS`, `ALLOWED_EXTENSIONS`, `CORS_ORIGINS` 등)
   - **API 엔드포인트**: `/api/session`, `/api/files/list`, `/api/files/listdir`, `/api/files/upload`, `/api/files/download/{filename}`, `/api/files/{filename}` (DELETE), `/api/files/read/{file_path}`, `/api/files/write`, `/api/health`
-  - Path Traversal 공격 방지 로직 내장 (`is_safe_path()`)
+  - Path Traversal 공격 방지 로직 내장 (`is_safe_path()` — symlink 감지 포함)
   - 비활성 워크스페이스를 30분 주기로 자동 정리
+  - 구조화 로깅 (`logging` 모듈 사용)
   - 평면(flat) 구조: 폴더 생성/삭제 API 없음
+- **`tests/`**: pytest 테스트 스위트
+  - `conftest.py`: 공통 fixture (`tmp_workspace`, `mock_session_state`)
+  - `test_config.py`: config.py 환경변수 로딩 테스트
+  - `test_models.py`: Task/Plan/ToolCallRecord `to_dict()` 직렬화 테스트
+  - `test_session.py`: core/session.py 네임스페이스 세션 상태 테스트
+  - `test_server.py`: FastAPI 엔드포인트 테스트 (TestClient)
+  - `test_rag_utils.py`: BM25 전처리, 청크 문맥 추출, Req ID regex 테스트
 
 ## 주요 제약 조건
 
 1. **대형 파일 처리**: `read_file` 도구는 500줄 이상의 파일을 한 번에 반환하지 않음. `start_line`/`end_line`으로 500줄 단위 청크로 읽어야 함
 2. **파일 수정**: Search & Replace 방식. `old_text`는 파일 내에서 유일해야 작동
 3. **상태 관리**: Streamlit 재실행 특성을 고려하여 `st.session_state`를 안전하게 다룰 것. 모든 세션 키는 `core/session.py`의 `ns(prefix, key)` → `"{prefix}.{key}"` 형식 네임스페이스를 사용하여 앱 간 충돌을 방지
-4. **RAG 환경 설정**: `.env`에서 `EMBEDDING_PROVIDER`, `OLLAMA_EMBEDDING_MODEL`, `GEMINI_EMBEDDING_MODEL` 설정 필수
+4. **RAG 환경 설정**: `config.py`가 `.env`에서 `EMBEDDING_PROVIDER`, `OLLAMA_EMBEDDING_MODEL`, `GEMINI_EMBEDDING_MODEL` 등을 자동 로드. 새 설정 추가 시 `config.py`에 상수를 정의하고 다른 모듈에서 import하여 사용
 5. **파일 관리 정책**: 워크스페이스는 파일만 관리 (폴더 계층 구조 미지원). 단일 파일 및 전체 워크스페이스 용량 제한 각 100MB. 24시간 비활성 시 자동 삭제
 
 ## 코드 컨벤션
@@ -107,12 +116,14 @@ Ollama(로컬 LLM), Gemini API, vLLM을 지원하며, 여러 앱(DeepAssist, Tes
 - Python 3, `typing` 모듈을 통한 Type Hinting 적극 사용
 - 4-스페이스 들여쓰기, PEP 8 준수
 - 모듈 상단, 클래스 선언부, 복잡한 함수에 docstring 포함
-- 단일 책임 원칙 적용: 런처(`app.py`), 공유 코어(`core/`), 앱 설정(`apps/`), 모델(`models.py`), 클라이언트(`llm_clients.py`), 에이전트(`agent.py`), 도구(`mcp_server.py`), RAG(`rag.py`), 서버(`server.py`)
+- 단일 책임 원칙 적용: 런처(`app.py`), 공유 코어(`core/`), 앱 설정(`apps/`), 설정(`config.py`), 모델(`models.py`), 클라이언트(`llm_clients.py`), 에이전트(`agent.py`), 도구(`mcp_server.py`), RAG(`rag/`), 서버(`server.py`), 테스트(`tests/`)
 
 ### 언어 규칙
 - **Docstring, 주석, UI 메시지, 프롬프트**: 한국어
 - **변수명, 함수명, 클래스명**: 영어 (PEP 8 네이밍)
-- 콘솔 출력은 이모지 접두사 + 한국어 메시지: `print(f"🔨 {count}개의 파일로 DB 구축 시작...")`
+- 로깅은 `logging` 모듈 사용. 각 모듈에 `logger = logging.getLogger(__name__)` 선언
+  - `logger.info()`: 정상 동작 기록, `logger.warning()`: 비정상 상황, `logger.error()`: 오류
+  - Streamlit UI 스트리밍 출력(`stream_to_terminal=True`)에서만 `print()` 허용
 
 ### 네이밍
 - 클래스: `PascalCase` (예: `ClaudeAgentRunner`, `MarkdownRAG`)
@@ -181,25 +192,35 @@ Ollama(로컬 LLM), Gemini API, vLLM을 지원하며, 여러 앱(DeepAssist, Tes
 5. `core/` 유틸리티 재사용 가능 (선택사항). 완전 자체 구현도 가능
 6. 재시작 시 `discover_apps()`가 `config.py` + `page.py`를 자동 검색하여 등록
 
-**RAG(`rag.py`) 수정:**
-- `MarkdownRAG`의 공개 메서드(`build_or_load`, `retrieve`) 인터페이스 유지
-- `bm25_preprocessor` 함수는 반드시 모듈 최상단(글로벌 스코프)에 선언 (pickle 직렬화 요구)
+**RAG(`rag/` 패키지) 수정:**
+- `MarkdownRAG`/`CodeRAG`의 공개 메서드(`build_or_load`, `retrieve`) 인터페이스 유지
+- `bm25_preprocessor` 함수는 `rag/utils.py`에 정의, `rag/__init__.py`에서 re-export (pickle 호환 필수)
+- `code_bm25_preprocessor` 함수는 `rag/code.py`에 정의, `rag/__init__.py`에서 re-export (pickle 호환 필수)
 - 마크다운(.md) 파일만 지원. PDF 관련 코드는 의도적으로 제거됨
-- 새 문서 추가: `__main__`의 `DOCS` 리스트에 항목 추가 (`label`, `source`, `db_path`, `queries`)
+- 새 문서 추가: `rag/__main__.py`의 `TESTS` 리스트에 항목 추가 (`label`, `source`, `db_path`, `queries`)
 - 임베딩 모델 변경 시 해당 knowledge 폴더 삭제 후 DB 재구축 필요
+- 임베딩 설정은 `config.py`에서 로드 (`EMBEDDING_PROVIDER`, `OLLAMA_EMBEDDING_MODEL` 등). `load_dotenv()` 직접 호출 금지
 - 청킹 파라미터: `min_chunk_size=1000`, `max_chunk_size=3000`
-- 주요 정규식 패턴 (모듈 상단):
+- 주요 정규식 패턴 (`rag/constants.py`):
   - `_REQ_ID_RE`: Requirement ID (`TEL-6`, `SEC-3`), `_REQ_ID_EXCLUDE`로 오탐 방지
   - `_ABBR_DEF_RE`: 약어 정의 (`Full Name (ABBR)`)
   - `_TABLE_ROW_RE` / `_TABLE_SEP_RE`: 테이블 행/구분선
 - 검색 분기: `TERM_INDEX_MAX_HITS`(10) 이하 매핑인 희귀 용어만 직접 검색, 초과 시 앙상블
-- DB는 3개 파일로 구성: `faiss_index/`, `bm25_retriever.pkl`, `term_index.pkl` — 하나라도 없으면 재구축
+- MarkdownRAG DB는 3개 파일로 구성: `faiss_index/`, `bm25_retriever.pkl`, `term_index.pkl` — 하나라도 없으면 재구축
+- FAISS 배치 빌드: `BaseRAG.FAISS_BATCH_SIZE`(10,000) 단위로 인덱싱하여 대규모 문서셋의 메모리 효율 향상
+- CodeRAG 병렬 로드: `ThreadPoolExecutor`로 5개 pickle 인덱스를 병렬 로드하여 DB 로드 시간 단축
 
 **파일 서버(`server.py`) 수정:**
-- `is_safe_path()` 보안 검증 함수 우회/제거 금지
-- 상수는 파일 상단에서 관리
+- `is_safe_path()` 보안 검증 함수 우회/제거 금지 (symlink 감지 포함)
+- 상수는 `config.py`에서 import하여 사용. 하드코딩 금지
 - FastAPI 서버는 파일 관리만 담당. 에이전트 실행 로직은 `app.py`에서 처리
 - 폴더 생성/삭제 API 없음. 평면 구조로 파일만 관리
+
+**테스트(`tests/`) 수정:**
+- 새 기능 추가 시 `tests/` 디렉토리에 대응하는 테스트 파일 추가 권장
+- `pytest tests/ -v`로 전체 테스트 실행
+- `conftest.py`의 `tmp_workspace`, `mock_session_state` fixture 활용
+- Streamlit `st.session_state` 의존 코드는 `mock_session_state` fixture로 모킹
 
 **워크스페이스 탭(`core/workspace_ui.py`) 수정:**
 - 네임스페이스 세션 키: `{prefix}.editing_file`, `{prefix}._uploaded_hash`

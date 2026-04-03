@@ -6,9 +6,15 @@
 import os
 import streamlit as st
 from llm_clients import OllamaClient, GeminiClient
+from config import (
+    OLLAMA_DEFAULT_URL, OLLAMA_DEFAULT_MODEL,
+    VLLM_DEFAULT_URL, VLLM_DEFAULT_MODEL,
+    GEMINI_DEFAULT_MODEL,
+)
+from models import ProviderConfig
 
 
-def render_llm_sidebar() -> dict:
+def render_llm_sidebar() -> ProviderConfig:
     """
     LLM 프로바이더 선택 UI를 렌더링하고 설정값 딕셔너리를 반환합니다.
 
@@ -33,20 +39,20 @@ def render_llm_sidebar() -> dict:
     )
 
     # 프로바이더별 초기값
-    ollama_url = "http://localhost:11434"
-    vllm_url = "http://localhost:8000"
+    ollama_url = OLLAMA_DEFAULT_URL
+    vllm_url = VLLM_DEFAULT_URL
     api_key = ""
     model_name = ""
 
     if llm_provider == "Ollama":
         ollama_url = st.text_input(
             "Ollama URL",
-            value="http://localhost:11434",
+            value=OLLAMA_DEFAULT_URL,
             help="Ollama 서버 주소",
         )
         model_name = st.text_input(
             "모델",
-            value="qwen3:8b",
+            value=OLLAMA_DEFAULT_MODEL,
             help="Ollama에 설치된 모델명 (에이전트 모드는 tool calling 지원 모델 필요: qwen3:8b, llama3.1 등)",
         )
         if st.button("🔌 연결 테스트", use_container_width=True):
@@ -66,7 +72,7 @@ def render_llm_sidebar() -> dict:
         model_name = st.selectbox(
             "모델",
             [
-                "gemini-2.5-flash-lite",
+                GEMINI_DEFAULT_MODEL,
             ],
         )
         if st.button("🔌 연결 테스트", use_container_width=True):
@@ -80,12 +86,12 @@ def render_llm_sidebar() -> dict:
     else:  # vLLM
         vllm_url = st.text_input(
             "vLLM 서버 URL",
-            value="http://localhost:8000",
+            value=VLLM_DEFAULT_URL,
             help="vLLM 서빙 엔진 주소 (OpenAI 호환 API)",
         )
         model_name = st.text_input(
             "모델명",
-            value="Qwen/Qwen3-8B",
+            value=VLLM_DEFAULT_MODEL,
             help="vLLM에 로드된 모델 ID (HuggingFace 이름)",
         )
         st.info(
