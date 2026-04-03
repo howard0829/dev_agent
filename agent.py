@@ -32,6 +32,9 @@ except Exception as _claude_err:
     _CLAUDE_IMPORT_ERROR = str(_claude_err)
 
 
+# 미완료 Task 자동 재시도 최대 횟수
+MAX_CONTINUATIONS = 2
+
 # SDK에 전달할 허용 도구 목록 (모델이 필요시 자동 선택)
 ALLOWED_TOOLS = [
     "Bash", "Read", "Write", "Edit", "Glob", "Grep",
@@ -242,10 +245,89 @@ class ClaudeAgentRunner:
             "3. 각 Task를 완료할 때 '✅ Task N 완료: <완료한 작업 요약>' 형태로 출력하세요.\n"
             "4. 도구를 호출하기 전에 왜 그 도구를 사용하는지 한 줄로 간단히 설명하세요.\n"
             "   예: '로그인 폼 컴포넌트를 작성합니다.' → Write 도구 호출\n"
-            "5. MUST USE TOOLS: 코드를 작성하거나 수정할 때는 반드시 Write/Edit 등의 도구를 직접 호출하여 실제 파일 시스템에 저장하세요. "
+            "5. 모든 Task를 완료한 후 반드시 마지막에 각 Task의 완료 여부를 점검하고, "
+            "미완료 Task가 있으면 계속 수행하세요.\n"
+            "6. MUST USE TOOLS: 코드를 작성하거나 수정할 때는 반드시 Write/Edit 등의 도구를 직접 호출하여 실제 파일 시스템에 저장하세요. "
             "절대로 마크다운 코드 블럭만 출력하고 파일 생성을 완료했다고 거짓말(Hallucinate)하지 마세요.\n\n"
             f"{prompt}"
         )
+
+        async def _process_response(client, event_queue, todo_items, tool_counter, last_tool_record, final_text):
+            """SDK 응답 메시지를 처리하는 내부 헬퍼"""
+            async for msg in client.receive_response():
+                if isinstance(msg, AssistantMessage):
+                    for block in msg.content:
+                        if isinstance(block, TextBlock):
+                            text = block.text.strip()
+                            if text:
+                                final_text += block.text
+                                event_queue.put(("agent_text", text))
+                                event_queue.put(("status", text))
+                                self._parse_markdown_todos(text, todo_items, event_queue)
+
+                        elif isinstance(block, ToolUseBlock):
+                            tool_counter += 1
+                            tool_args = block.input if block.input else {}
+
+                            # TodoWrite 도구 호출 → todo_update 이벤트로 변환
+                            if block.name == "TodoWrite":
+                                todos_raw = tool_args.get("todos", [])
+                                todo_items.clear()
+                                todo_items.extend([
+                                    {"text": t.get("content", ""), "status": t.get("status", "pending")}
+                                    for t in todos_raw
+                                ])
+                                event_queue.put(("todo_update", [t.copy() for t in todo_items]))
+                                done = sum(1 for t in todo_items if t["status"] == "completed")
+                                prog = sum(1 for t in todo_items if t["status"] == "in_progress")
+                                event_queue.put(("status", f"Todo 업데이트 ({done} 완료 / {prog} 진행 중 / {len(todo_items)} 전체)"))
+                                continue
+
+                            summary = self._format_tool_summary(block.name, tool_args)
+
+                            record = ToolCallRecord(
+                                tool_name=block.name,
+                                arguments=tool_args,
+                                result="(실행 대기 중)",
+                                timestamp=time.time(),
+                            )
+                            self.tool_call_log.append(record)
+                            last_tool_record = record
+                            event_queue.put(("tool_call", record))
+                            event_queue.put(("status", f"[{tool_counter}] {block.name} — {summary}"))
+
+                        elif isinstance(block, ToolResultBlock):
+                            result_text = ""
+                            if hasattr(block, 'content'):
+                                if isinstance(block.content, str):
+                                    result_text = block.content
+                                elif isinstance(block.content, list):
+                                    for item in block.content:
+                                        if hasattr(item, 'text'):
+                                            result_text += item.text
+                                        elif isinstance(item, dict) and 'text' in item:
+                                            result_text += item['text']
+
+                            if last_tool_record:
+                                last_tool_record.result = result_text[:2000] if result_text else "(완료)"
+                                event_queue.put(("tool_call", last_tool_record))
+
+                            if result_text:
+                                event_queue.put(("status", f"   -> 결과: {result_text.strip()}"))
+                            else:
+                                event_queue.put(("status", "   -> 완료"))
+
+                elif isinstance(msg, ResultMessage):
+                    if hasattr(msg, 'result') and msg.result:
+                        final_text = msg.result
+                    if hasattr(msg, 'usage') and msg.usage:
+                        usage = msg.usage
+                        event_queue.put(("status",
+                            f"토큰: 입력={getattr(usage, 'input_tokens', '?')} "
+                            f"출력={getattr(usage, 'output_tokens', '?')}"
+                        ))
+
+            return tool_counter, last_tool_record, final_text
 
         # 백엔드 전략 선택 및 활성화
         strategy = self._select_strategy()
@@ -254,106 +336,65 @@ class ClaudeAgentRunner:
             strategy.activate(event_queue)
 
             async with ClaudeSDKClient(options=options) as client:
+                # 1차 실행
                 await client.query(forced_prompt)
-                async for msg in client.receive_response():
-                    if isinstance(msg, AssistantMessage):
-                        for block in msg.content:
-                            if isinstance(block, TextBlock):
-                                text = block.text.strip()
-                                if text:
-                                    final_text += block.text
-                                    event_queue.put(("agent_text", text))
-                                    event_queue.put(("status", text))
-                                    self._parse_markdown_todos(text, todo_items, event_queue)
+                tool_counter, last_tool_record, final_text = await _process_response(
+                    client, event_queue, todo_items, tool_counter, last_tool_record, final_text
+                )
 
-                            elif isinstance(block, ToolUseBlock):
-                                tool_counter += 1
-                                tool_args = block.input if block.input else {}
+                # 미완료 Task 점검 및 자동 재시도
+                for attempt in range(MAX_CONTINUATIONS):
+                    incomplete = [
+                        (i, t) for i, t in enumerate(todo_items)
+                        if t["status"] in ("pending", "in_progress")
+                    ]
+                    if not incomplete:
+                        break
 
-                                # Todo: 도구 시작 시 in_progress → completed 전환
-                                if todo_items and block.name not in ("TodoWrite",):
-                                    changed = False
-                                    completed_idx = -1
-                                    for i, t in enumerate(todo_items):
-                                        if t["status"] == "in_progress":
-                                            t["status"] = "completed"
-                                            completed_idx = i
-                                            changed = True
-                                            break
-                                    if changed:
-                                        if completed_idx >= 0:
-                                            event_queue.put(("status", f"✅ Task {completed_idx + 1} 완료: {todo_items[completed_idx]['text']}"))
-                                        for t in todo_items:
-                                            if t["status"] == "pending":
-                                                t["status"] = "in_progress"
-                                                break
-                                        event_queue.put(("todo_update", [t.copy() for t in todo_items]))
+                    incomplete_list = "\n".join(
+                        f"  {i + 1}. {t['text']} (상태: {t['status']})"
+                        for i, t in incomplete
+                    )
+                    event_queue.put(("status",
+                        f"⚠️ 미완료 Task {len(incomplete)}개 감지 — "
+                        f"추가 수행 중 (시도 {attempt + 1}/{MAX_CONTINUATIONS})"
+                    ))
+                    event_queue.put(("agent_text",
+                        f"⚠️ 미완료 Task {len(incomplete)}개 감지 — 계속 수행합니다..."
+                    ))
 
-                                # TodoWrite 도구 호출 → todo_update 이벤트로 변환
-                                if block.name == "TodoWrite":
-                                    todos_raw = tool_args.get("todos", [])
-                                    todo_items = [
-                                        {"text": t.get("content", ""), "status": t.get("status", "pending")}
-                                        for t in todos_raw
-                                    ]
-                                    event_queue.put(("todo_update", todo_items))
-                                    done = sum(1 for t in todo_items if t["status"] == "completed")
-                                    prog = sum(1 for t in todo_items if t["status"] == "in_progress")
-                                    event_queue.put(("status", f"Todo 업데이트 ({done} 완료 / {prog} 진행 중 / {len(todo_items)} 전체)"))
-                                    continue
-
-                                summary = self._format_tool_summary(block.name, tool_args)
-
-                                record = ToolCallRecord(
-                                    tool_name=block.name,
-                                    arguments=tool_args,
-                                    result="(실행 대기 중)",
-                                    timestamp=time.time(),
-                                )
-                                self.tool_call_log.append(record)
-                                last_tool_record = record
-                                event_queue.put(("tool_call", record))
-                                event_queue.put(("status", f"[{tool_counter}] {block.name} — {summary}"))
-
-                            elif isinstance(block, ToolResultBlock):
-                                result_text = ""
-                                if hasattr(block, 'content'):
-                                    if isinstance(block.content, str):
-                                        result_text = block.content
-                                    elif isinstance(block.content, list):
-                                        for item in block.content:
-                                            if hasattr(item, 'text'):
-                                                result_text += item.text
-                                            elif isinstance(item, dict) and 'text' in item:
-                                                result_text += item['text']
-
-                                if last_tool_record:
-                                    last_tool_record.result = result_text[:2000] if result_text else "(완료)"
-                                    event_queue.put(("tool_call", last_tool_record))
-
-                                if result_text:
-                                    event_queue.put(("status", f"   -> 결과: {result_text.strip()}"))
-                                else:
-                                    event_queue.put(("status", "   -> 완료"))
-
-                    elif isinstance(msg, ResultMessage):
-                        if hasattr(msg, 'result') and msg.result:
-                            final_text = msg.result
-                        if hasattr(msg, 'usage') and msg.usage:
-                            usage = msg.usage
-                            event_queue.put(("status",
-                                f"토큰: 입력={getattr(usage, 'input_tokens', '?')} "
-                                f"출력={getattr(usage, 'output_tokens', '?')}"
-                            ))
+                    cont_prompt = (
+                        f"⚠️ 다음 {len(incomplete)}개의 Task가 아직 미완료 상태입니다. "
+                        f"이어서 수행하세요:\n{incomplete_list}\n\n"
+                        "각 Task를 시작할 때 '🔄 Task N 시작: ...' 형태로, "
+                        "완료할 때 '✅ Task N 완료: ...' 형태로 출력하세요."
+                    )
+                    await client.query(cont_prompt)
+                    tool_counter, last_tool_record, final_text = await _process_response(
+                        client, event_queue, todo_items, tool_counter, last_tool_record, final_text
+                    )
 
         finally:
             strategy.cleanup(event_queue)
 
-        # 남은 in_progress/pending 항목을 모두 completed로 마무리
+        # 최종 완료 상태 보고
         if todo_items:
-            for t in todo_items:
-                if t["status"] in ("pending", "in_progress"):
-                    t["status"] = "completed"
+            total = len(todo_items)
+            done = sum(1 for t in todo_items if t["status"] == "completed")
+            incomplete = [t for t in todo_items if t["status"] != "completed"]
+
+            if incomplete:
+                incomplete_summary = "\n".join(f"  - {t['text']}" for t in incomplete)
+                event_queue.put(("status",
+                    f"⚠️ 미완료 Task {len(incomplete)}/{total}개:\n{incomplete_summary}"
+                ))
+                event_queue.put(("agent_text",
+                    f"⚠️ **미완료 Task {len(incomplete)}/{total}개:**\n{incomplete_summary}"
+                ))
+            else:
+                event_queue.put(("status", f"✅ 모든 Task 완료 ({done}/{total})"))
+                event_queue.put(("agent_text", f"✅ **모든 Task 완료 ({done}/{total})**"))
+
             event_queue.put(("todo_update", [t.copy() for t in todo_items]))
 
         event_queue.put(("status", f"Claude Agent 작업 완료 (도구 {tool_counter}회 호출)"))
@@ -367,10 +408,11 @@ class ClaudeAgentRunner:
 
     @staticmethod
     def _parse_markdown_todos(text: str, todo_items: list, event_queue) -> None:
-        """텍스트에서 넘버링 Todo와 완료 메시지를 파싱하여 todo_items를 갱신"""
+        """텍스트에서 넘버링 Todo, 시작/완료 마커를 파싱하여 todo_items를 갱신"""
         changed = False
         for line in text.split("\n"):
             line_s = line.strip()
+            # 넘버링 Todo 항목 파싱 (1. 항목, 2. 항목, ...)
             m = re.match(r'^(\d+)\.\s+(.+)', line_s)
             if m:
                 item_text = m.group(2).strip()
@@ -378,6 +420,17 @@ class ClaudeAgentRunner:
                     todo_items.append({"text": item_text, "status": "pending"})
                     changed = True
                 continue
+            # 🔄 Task N 시작 마커 파싱
+            m = re.match(r'^🔄\s*[Tt]ask\s*(\d+)\s*시작[:\s]*(.*)', line_s)
+            if m:
+                task_num = int(m.group(1))
+                idx = task_num - 1
+                if 0 <= idx < len(todo_items) and todo_items[idx]["status"] != "completed":
+                    todo_items[idx]["status"] = "in_progress"
+                    changed = True
+                    event_queue.put(("status", f"🔄 Task {task_num} 시작: {todo_items[idx]['text']}"))
+                continue
+            # ✅ Task N 완료 마커 파싱
             m = re.match(r'^✅\s*[Tt]ask\s*(\d+)\s*완료[:\s]*(.*)', line_s)
             if m:
                 task_num = int(m.group(1))

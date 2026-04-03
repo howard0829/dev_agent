@@ -57,6 +57,8 @@ Ollama(로컬 LLM), Gemini API, vLLM, OpenAI 호환 API를 지원하며, 여러 
   - `ClaudeAgentRunner` 클래스: SDK 기반으로 구동되며 `on_status`/`on_tool_call`/`on_agent_text` 콜백으로 UI와 연동
   - **실시간 진행 표시**: `on_agent_text` 콜백으로 에이전트의 계획/설명 텍스트를 메인 채팅 영역에 실시간 스트리밍. `"agent_text"` 이벤트로 도구 호출 로그(`"status"`)와 분리
   - **강화된 시스템 프롬프트**: `forced_prompt`가 각 Task 시작 시 `🔄 Task N 시작:` 마커 출력, 도구 호출 전 이유 설명을 지시하여 진행 상황의 가독성 향상
+  - **미완료 Task 자동 재시도**: `_async_run()` 완료 후 미완료(pending/in_progress) Task를 자동 감지하여 에이전트에게 재프롬프트. `MAX_CONTINUATIONS`(기본 2회)까지 재시도. 최종 완료 상태를 `✅ 모든 Task 완료` 또는 `⚠️ 미완료 Task N개` 형태로 보고
+  - **Task 상태 추적**: 모델의 명시적 마커(`🔄 Task N 시작`, `✅ Task N 완료`) 기반으로 정확하게 추적. 도구 호출 횟수 기반 자동 완료는 제거
   - **백엔드 전략 위임**: `backend_mode` 파라미터(`auto`/`proxy`/`native`)로 `backend_strategy.py`의 전략을 선택. `_async_run()`에서 `strategy.activate()` → SDK 호출 → `strategy.cleanup()` 순서로 실행
   - `ALLOWED_TOOLS`: SDK에 전달할 허용 도구 목록
   - **자동 룰 로더**: 작업 디렉토리에 `DeepAssist.md` 파일이 존재하면 시스템 프롬프트에 자동 주입 (`DEEPASSIST_MD_MAX_SIZE` 크기 제한 적용)
