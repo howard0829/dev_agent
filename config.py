@@ -34,6 +34,14 @@ GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 CODE_EMBEDDING_MODEL: str = os.getenv("CODE_EMBEDDING_MODEL", "")
 
 # ──────────────────────────────────────────────
+# OpenAI 호환 직접 연결 설정
+# ──────────────────────────────────────────────
+
+OPENAI_DIRECT_BASE_URL: str = os.getenv("ANTHROPIC_BASE_URL", "http://localhost:8082")
+OPENAI_DIRECT_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+OPENAI_DIRECT_MODEL: str = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "")
+
+# ──────────────────────────────────────────────
 # claude-code-proxy 설정
 # ──────────────────────────────────────────────
 

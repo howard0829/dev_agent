@@ -17,6 +17,7 @@ import requests
 from config import (
     OLLAMA_DEFAULT_URL, VLLM_DEFAULT_URL,
     PROXY_PORT, PROXY_MAX_WAIT,
+    OPENAI_DIRECT_BASE_URL, OPENAI_DIRECT_API_KEY, OPENAI_DIRECT_MODEL,
 )
 
 logger = logging.getLogger(__name__)
@@ -266,7 +267,71 @@ class OllamaNativeStrategy(BackendStrategy):
 
 
 # ──────────────────────────────────────────────
-# 3) vLLM 서빙 엔진 경유 (프로덕션 고성능)
+# 3) OpenAI 호환 직접 연결 (외부 프록시/API)
+# ──────────────────────────────────────────────
+
+class OpenAIDirectStrategy(BackendStrategy):
+    """OpenAI 호환 엔드포인트에 직접 연결하는 전략.
+
+    이미 실행 중인 외부 프록시나 OpenAI 호환 API 서버에
+    환경변수만 설정하여 Claude Agent SDK를 연결한다.
+    프록시 프로세스를 자체 기동하지 않는다.
+    """
+
+    def __init__(
+        self,
+        model: str = "",
+        base_url: str = "",
+        api_key: str = "",
+    ):
+        self.model = model or OPENAI_DIRECT_MODEL
+        self.base_url = (base_url or OPENAI_DIRECT_BASE_URL).rstrip("/")
+        self.api_key = api_key or OPENAI_DIRECT_API_KEY or "dummy"
+
+    def check(self) -> tuple[bool, str]:
+        if not self.base_url:
+            return False, (
+                "ANTHROPIC_BASE_URL이 설정되지 않았습니다. "
+                ".env 파일에 ANTHROPIC_BASE_URL을 설정하세요."
+            )
+        if not self.model:
+            return False, (
+                "ANTHROPIC_DEFAULT_SONNET_MODEL이 설정되지 않았습니다. "
+                ".env 파일에 모델명을 설정하세요."
+            )
+        # 엔드포인트 접근성 확인
+        try:
+            resp = requests.get(f"{self.base_url}/health", timeout=5)
+            if resp.status_code == 200:
+                return True, f"OpenAI Direct 모드 준비됨 ({self.base_url}, 모델: {self.model})"
+        except requests.ConnectionError:
+            pass
+        except Exception:
+            pass
+        # health 엔드포인트가 없어도 연결 자체는 시도
+        return True, f"OpenAI Direct 모드 ({self.base_url}, 모델: {self.model}) — health check 미확인"
+
+    def activate(self, event_queue) -> None:
+        os.environ["ANTHROPIC_BASE_URL"] = self.base_url
+        os.environ["ANTHROPIC_API_KEY"] = self.api_key
+
+        # 모든 모델 슬롯을 동일 모델로 매핑
+        os.environ["ANTHROPIC_DEFAULT_SONNET_MODEL"] = self.model
+        os.environ["ANTHROPIC_DEFAULT_OPUS_MODEL"] = self.model
+        os.environ["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = self.model
+
+        event_queue.put(("status",
+            f"[OpenAI Direct] {self.base_url} 직접 연결 (모델: {self.model})"))
+
+    def cleanup(self, event_queue) -> None:
+        # 환경변수 정리 (다른 전략과 충돌 방지)
+        for key in ("ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+                     "ANTHROPIC_DEFAULT_OPUS_MODEL"):
+            os.environ.pop(key, None)
+
+
+# ──────────────────────────────────────────────
+# 4) vLLM 서빙 엔진 경유 (프로덕션 고성능)
 # ──────────────────────────────────────────────
 
 class VllmStrategy(ProxyStrategy):
@@ -389,6 +454,10 @@ def select_strategy(
     Returns:
         BackendStrategy 인스턴스
     """
+    # OpenAI Direct → 환경변수 직접 설정 (프록시 미기동)
+    if llm_provider == "OpenAI":
+        return OpenAIDirectStrategy(model, api_key=api_key)
+
     # vLLM → 전용 전략 (claude-code-proxy 경유)
     if llm_provider == "vLLM":
         return VllmStrategy(model, vllm_url, api_key)

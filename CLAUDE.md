@@ -1,7 +1,7 @@
 # 프로젝트 가이드
 
 멀티 앱 아키텍처 기반의 자율 코딩 에이전트 플랫폼입니다.
-Ollama(로컬 LLM), Gemini API, vLLM을 지원하며, 여러 앱(DeepAssist, TestMancer 등)을 하나의 플랫폼에서 전환하여 사용할 수 있습니다.
+Ollama(로컬 LLM), Gemini API, vLLM, OpenAI 호환 API를 지원하며, 여러 앱(DeepAssist, TestMancer 등)을 하나의 플랫폼에서 전환하여 사용할 수 있습니다.
 코드를 수정하거나 기능을 추가할 때 반드시 따라야 하는 가이드라인입니다.
 
 ## 아키텍처 개요
@@ -19,19 +19,20 @@ Ollama(로컬 LLM), Gemini API, vLLM을 지원하며, 여러 앱(DeepAssist, Tes
   - **`apps/__init__.py`**: `discover_apps()` — `apps/` 하위 패키지에서 `config.py` + `page.py`를 자동 검색. `page.py`에 `init_app_session`, `render_sidebar`, `render_main` 3개 함수 필수
   - **`apps/deep_assist/`**: DeepAssist (자율 코딩 에이전트)
     - `config.py`: `APP_CONFIG` dict (`id`, `name`, `icon`, `description`, `tabs`, `default_mode`, `custom_css`)
-    - `page.py`: `core/` 유틸리티를 재사용. 사이드바(LLM 3종 프로바이더: Ollama/Gemini/vLLM), 메인(채팅+워크스페이스 탭)
+    - `page.py`: `core/` 유틸리티를 재사용. 사이드바(LLM 4종 프로바이더: Ollama/Gemini/vLLM/OpenAI), 메인(채팅+워크스페이스 탭)
   - **`apps/test_mancer/`**: TestMancer (테스트 자동화 에이전트)
     - `config.py`: TestMancer 전용 설정
     - `page.py`: **자체 구현**. 사이드바(LLM 설정 + 테스트 프레임워크/대상 설정), 메인(채팅+테스트 결과 탭), 전용 세션(`test_results`, `test_framework`, `test_target_dir`), 테스트 컨텍스트 프롬프트 주입
 - **`core/`**: 공유 유틸리티 (강제 아님, 앱이 선택적으로 import)
   - **`core/session.py`**: 네임스페이스 세션 상태 관리. `ns(prefix, key)` → `"{prefix}.{key}"` 형식으로 앱별 세션 격리. `init_session(prefix)`, `get_state(prefix, key)`, `set_state(prefix, key, value)`, `reset_chat(prefix)`, `reset_logs(prefix)`, `display_path()`
   - **`core/styles.py`**: 공통 CSS (앱 스위처 카드, 채팅, 사이드바 등). `apply_common_styles()`, `apply_custom_css(css)`
-  - **`core/sidebar.py`**: LLM 프로바이더 선택 UI. `render_llm_sidebar()` → 설정 dict 반환 (`llm_provider`, `model_name`, `api_key`, `ollama_url`, `vllm_url`, `enable_thinking`, `agent_mode`, `backend_mode`). vLLM 이외 프로바이더에서 백엔드 모드 선택 UI(`auto`/`proxy`/`native`) 표시. vLLM 선택 시 서버 URL과 모델명 입력 UI 표시. 앱이 사이드바를 자체 구현할 경우 사용하지 않아도 됨
+  - **`core/sidebar.py`**: LLM 프로바이더 선택 UI. `render_llm_sidebar()` → 설정 dict 반환 (`llm_provider`, `model_name`, `api_key`, `ollama_url`, `vllm_url`, `enable_thinking`, `agent_mode`, `backend_mode`). vLLM/OpenAI 이외 프로바이더에서 백엔드 모드 선택 UI(`auto`/`proxy`/`native`) 표시. OpenAI 선택 시 `.env`의 `ANTHROPIC_*` 환경변수에서 자동 로드. 앱이 사이드바를 자체 구현할 경우 사용하지 않아도 됨
   - **`core/chat_ui.py`**: 채팅 탭 공통 로직. `render_chat_tab(prefix, provider_cfg)`. 앱이 채팅 UI를 자체 구현할 경우 사용하지 않아도 됨
   - **`core/workspace_ui.py`**: 워크스페이스 파일 관리 탭. `render_workspace_tab(prefix)`. `httpx`를 통해 FastAPI 서버(`server.py`)와 통신
 - **`config.py`**: 중앙 설정 모듈 (환경변수 기반)
   - 모든 URL, 포트, 상수를 환경변수에서 로드. `.env` 파일 자동 로드
   - LLM 기본값: `OLLAMA_DEFAULT_URL`, `VLLM_DEFAULT_URL`, `OLLAMA_DEFAULT_MODEL`, `VLLM_DEFAULT_MODEL`, `GEMINI_DEFAULT_MODEL`
+  - OpenAI Direct: `OPENAI_DIRECT_BASE_URL`(`ANTHROPIC_BASE_URL`), `OPENAI_DIRECT_API_KEY`(`ANTHROPIC_API_KEY`), `OPENAI_DIRECT_MODEL`(`ANTHROPIC_DEFAULT_SONNET_MODEL`)
   - 임베딩: `EMBEDDING_PROVIDER`, `OLLAMA_EMBEDDING_MODEL`, `GEMINI_EMBEDDING_MODEL`, `GEMINI_API_KEY`, `CODE_EMBEDDING_MODEL`
   - 프록시: `PROXY_PORT`, `PROXY_MAX_WAIT`
   - 서버: `FILE_SERVER_URL`, `FILE_SERVER_PORT`, `WORKSPACES_ROOT`, `MAX_FILE_SIZE_MB`, `MAX_WORKSPACE_SIZE_MB`, `WORKSPACE_EXPIRE_HOURS`, `CLEANUP_INTERVAL_MINUTES`, `ALLOWED_EXTENSIONS`
@@ -49,7 +50,8 @@ Ollama(로컬 LLM), Gemini API, vLLM을 지원하며, 여러 앱(DeepAssist, Tes
   - **`ProxyStrategy`**: claude-code-proxy 경유. Ollama/Gemini → Claude API 형식 변환. Claude 특수 파라미터(context_management 등) 처리와 tool calling 변환을 프록시가 자체 처리
   - **`VllmStrategy`**: ProxyStrategy 상속. vLLM 서빙 엔진(OpenAI 호환 API) + claude-code-proxy 경유. Guided Decoding(Outlines)으로 tool call JSON 100% 유효성 보장
   - **`OllamaNativeStrategy`**: Ollama v0.14+ 네이티브 Anthropic API 호환 모드. 프록시 없이 직접 연결. `count_tokens` 이슈 우회를 위해 3개 모델 환경변수 매핑
-  - `select_strategy()`: 프로바이더 + 백엔드 모드에 따라 전략 자동 선택. `auto` 모드에서는 Native 시도 후 실패 시 Proxy 폴백. vLLM은 전용 전략 자동 선택
+  - **`OpenAIDirectStrategy`**: OpenAI 호환 엔드포인트에 직접 연결. 프록시 프로세스를 자체 기동하지 않고 `.env`의 `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_DEFAULT_*_MODEL` 환경변수만 설정하여 Claude Agent SDK가 외부 프록시/API에 연결
+  - `select_strategy()`: 프로바이더 + 백엔드 모드에 따라 전략 자동 선택. `auto` 모드에서는 Native 시도 후 실패 시 Proxy 폴백. vLLM/OpenAI는 전용 전략 자동 선택
   - 공유 유틸리티: `_check_ollama()`, `_read_log_tail()`, `_detect_dropped_params()`, `_safe_unlink()`
 - **`agent.py`**: Claude Agent SDK Runner
   - `ClaudeAgentRunner` 클래스: SDK 기반으로 구동되며 `on_status`/`on_tool_call` 콜백으로 UI와 연동
@@ -167,7 +169,8 @@ Ollama(로컬 LLM), Gemini API, vLLM을 지원하며, 여러 앱(DeepAssist, Tes
 - `ProxyStrategy`: claude-code-proxy를 사용. 프로바이더별 환경변수(`PREFERRED_PROVIDER`, `BIG_MODEL`, `SMALL_MODEL` 등)를 설정하여 프록시가 라우팅 수행
 - `VllmStrategy`: `ProxyStrategy`를 상속. vLLM의 OpenAI 호환 API를 `OPENAI_BASE_URL`로 지정하여 claude-code-proxy 경유
 - `OllamaNativeStrategy`: Ollama Anthropic 호환 모드 관련 이슈는 `check()`에서 `/v1/messages` 엔드포인트 접근 가능 여부로 사전 검증
-- `select_strategy()`의 auto 모드 폴백 로직: Native → Proxy 순서. vLLM은 전용 전략 자동 선택
+- `OpenAIDirectStrategy`: 프록시 미기동. `.env`의 `ANTHROPIC_*` 환경변수를 설정하여 외부 프록시/API에 직접 연결. `check()`에서 `/health` 엔드포인트 확인 (실패해도 연결 시도)
+- `select_strategy()`의 auto 모드 폴백 로직: Native → Proxy 순서. vLLM/OpenAI는 전용 전략 자동 선택
 
 **새로운 도구(Tool) 추가:**
 1. `mcp_server.py`에 `@mcp.tool()` 데코레이터와 함께 함수 작성

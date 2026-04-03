@@ -10,6 +10,7 @@ from config import (
     OLLAMA_DEFAULT_URL, OLLAMA_DEFAULT_MODEL,
     VLLM_DEFAULT_URL, VLLM_DEFAULT_MODEL,
     GEMINI_DEFAULT_MODEL,
+    OPENAI_DIRECT_BASE_URL, OPENAI_DIRECT_API_KEY, OPENAI_DIRECT_MODEL,
 )
 from models import ProviderConfig
 
@@ -34,7 +35,7 @@ def render_llm_sidebar() -> ProviderConfig:
     st.markdown("### ⚙️ LLM 프로바이더 설정")
     llm_provider = st.radio(
         "Provider 선택",
-        ["Ollama", "Gemini API", "vLLM"],
+        ["Ollama", "Gemini API", "vLLM", "OpenAI"],
         horizontal=True,
     )
 
@@ -82,6 +83,46 @@ def render_llm_sidebar() -> ProviderConfig:
                 st.success(msg)
             else:
                 st.error(msg)
+
+    elif llm_provider == "OpenAI":
+        st.info(
+            "💡 `.env` 파일에 다음 환경변수를 설정하세요:\n"
+            "```\n"
+            "ANTHROPIC_BASE_URL=http://localhost:8082\n"
+            "ANTHROPIC_API_KEY=sk-xxx\n"
+            "ANTHROPIC_DEFAULT_SONNET_MODEL=openai/GLM-4.7\n"
+            "ANTHROPIC_DEFAULT_OPUS_MODEL=openai/GLM-4.7\n"
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL=openai/GLM-4.7\n"
+            "```"
+        )
+        api_key = st.text_input(
+            "API Key",
+            value=OPENAI_DIRECT_API_KEY,
+            type="password",
+            help="ANTHROPIC_API_KEY 환경변수 값 (.env에서 자동 로드)",
+        )
+        model_name = st.text_input(
+            "모델명",
+            value=OPENAI_DIRECT_MODEL,
+            help="ANTHROPIC_DEFAULT_SONNET_MODEL 환경변수 값",
+        )
+        openai_base_url = st.text_input(
+            "Base URL",
+            value=OPENAI_DIRECT_BASE_URL,
+            help="ANTHROPIC_BASE_URL 환경변수 값 (외부 프록시 주소)",
+        )
+        if st.button("🔌 연결 테스트", use_container_width=True):
+            import requests as _req
+            try:
+                resp = _req.get(f"{openai_base_url.rstrip('/')}/health", timeout=5)
+                if resp.status_code == 200:
+                    st.success(f"연결 성공 ({openai_base_url})")
+                else:
+                    st.warning(f"서버 응답 (status={resp.status_code}). 연결은 시도 가능합니다.")
+            except _req.ConnectionError:
+                st.error(f"서버({openai_base_url})에 연결할 수 없습니다.")
+            except Exception as e:
+                st.error(f"연결 오류: {e}")
 
     else:  # vLLM
         vllm_url = st.text_input(
@@ -131,7 +172,7 @@ def render_llm_sidebar() -> ProviderConfig:
 
     # 백엔드 모드 (vLLM 이외 프로바이더에서만 표시)
     backend_mode = "auto"
-    if llm_provider not in ("vLLM",):
+    if llm_provider not in ("vLLM", "OpenAI"):
         st.markdown("---")
         st.markdown("### 🔌 백엔드 모드")
         backend_mode = st.radio(

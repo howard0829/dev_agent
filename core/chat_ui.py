@@ -115,7 +115,7 @@ def _get_agent(prefix: str, provider_cfg: ProviderConfig, callbacks: CallbackSet
         elif llm_provider == "Gemini API":
             return GeminiClient(api_key, model_name)
         else:
-            # vLLM 등 — 에이전트 러너를 채팅 모드로 사용
+            # vLLM, OpenAI 등 — 에이전트 러너를 채팅 모드로 사용
             return ClaudeAgentRunner(
                 llm_provider=llm_provider,
                 api_key=api_key,
@@ -123,6 +123,7 @@ def _get_agent(prefix: str, provider_cfg: ProviderConfig, callbacks: CallbackSet
                 vllm_url=vllm_url if llm_provider == "vLLM" else None,
                 working_dir=working_dir,
                 max_turns=AGENT_MAX_TURNS,
+                backend_mode=backend_mode,
             )
 
 

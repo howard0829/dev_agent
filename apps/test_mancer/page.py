@@ -12,7 +12,10 @@ from core.chat_ui import _make_callbacks
 from models import Plan, ToolCallRecord, ProviderConfig, CallbackSet
 from llm_clients import OllamaClient, GeminiClient
 from agent import ClaudeAgentRunner
-from config import OLLAMA_DEFAULT_URL, VLLM_DEFAULT_URL, AGENT_MAX_TURNS
+from config import (
+    OLLAMA_DEFAULT_URL, VLLM_DEFAULT_URL, AGENT_MAX_TURNS,
+    OPENAI_DIRECT_BASE_URL, OPENAI_DIRECT_API_KEY, OPENAI_DIRECT_MODEL,
+)
 
 
 # ──────────────────────────────────────────────
@@ -62,7 +65,7 @@ def render_sidebar(prefix: str) -> dict:
     st.markdown("### ⚙️ LLM 설정")
     llm_provider = st.radio(
         "Provider",
-        ["Ollama", "Gemini API", "vLLM"],
+        ["Ollama", "Gemini API", "vLLM", "OpenAI"],
         horizontal=True,
         key=f"{prefix}_llm_provider",
     )
@@ -90,6 +93,16 @@ def render_sidebar(prefix: str) -> dict:
         model_name = st.selectbox(
             "모델",
             ["gemini-2.5-flash-lite"],
+            key=f"{prefix}_model",
+        )
+    elif llm_provider == "OpenAI":
+        api_key = st.text_input(
+            "API Key", value=OPENAI_DIRECT_API_KEY,
+            type="password",
+            key=f"{prefix}_api_key",
+        )
+        model_name = st.text_input(
+            "모델명", value=OPENAI_DIRECT_MODEL,
             key=f"{prefix}_model",
         )
     else:  # vLLM

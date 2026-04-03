@@ -2,7 +2,7 @@
 
 **멀티 앱 아키텍처 기반 자율 코딩 에이전트 플랫폼 (Streamlit UI + FastAPI 파일 서버)**
 
-Ollama, Gemini API, vLLM을 지원하는 멀티 앱 플랫폼입니다.
+Ollama, Gemini API, vLLM, OpenAI 호환 API를 지원하는 멀티 앱 플랫폼입니다.
 메인 화면 상단의 카드 바에서 앱(DeepAssist, TestMancer 등)을 선택하여 전환할 수 있으며, 각 앱의 대화 상태가 독립적으로 보존됩니다.
 사용자의 요청을 분석하여 To-do 계획을 수립하고, 순차적으로 실행한 뒤, 검증까지 자동으로 수행합니다.
 멀티유저 환경을 지원하며, 사용자 IP별로 독립 워크스페이스를 자동 할당합니다.
@@ -15,8 +15,8 @@ Ollama, Gemini API, vLLM을 지원하는 멀티 앱 플랫폼입니다.
 |------|------|
 | **멀티 앱 플랫폼** | 메인 화면 카드 바에서 앱(DeepAssist, TestMancer 등) 전환. 앱별 세션 독립 보존 |
 | **앱 자동 레지스트리** | `apps/{name}/config.py`에 `APP_CONFIG` 추가만으로 새 앱 자동 등록 |
-| **멀티 LLM 통합 구조** | **Claude Agent SDK**를 단일 코어로 통일. 백엔드 전략 패턴으로 Proxy(claude-code-proxy) / Ollama Native / vLLM 3종 지원 |
-| **백엔드 모드 전환** | 사이드바에서 프로바이더 선택 (Ollama/Gemini/vLLM). Ollama는 `auto`/`proxy`/`native` 모드 추가 지원 |
+| **멀티 LLM 통합 구조** | **Claude Agent SDK**를 단일 코어로 통일. 백엔드 전략 패턴으로 Proxy(claude-code-proxy) / Ollama Native / vLLM / OpenAI Direct 4종 지원 |
+| **백엔드 모드 전환** | 사이드바에서 프로바이더 선택 (Ollama/Gemini/vLLM/OpenAI). Ollama는 `auto`/`proxy`/`native` 모드 추가 지원 |
 | **커스텀 룰 자동화** | 워크스페이스 내 `DeepAssist.md`가 있으면 AI 프롬프트에 자동 적용 |
 | **에이전트 도구 시스템** | Claude MCP 서버 및 빌트인 도구(Bash, Read, Write, Edit, Glob 등) 전면 사용 |
 | **FAISS + BM25 하이브리드 RAG** | `rag/` 패키지: MarkdownRAG + CodeRAG 통합. 쿼리 기반 DB 자동 선택, 문서/프로젝트별 식별, tree-sitter AST 코드 청킹, 서브 청크 재조립, FAISS(60%)+BM25(40%) 앙상블, 배치 빌드(10K단위), 병렬 인덱스 로드 |
@@ -354,6 +354,11 @@ pytest tests/ -v            # 전체 유닛 테스트
 | `GEMINI_EMBEDDING_MODEL` | Gemini 임베딩 모델명 | `models/text-embedding-004` |
 | `CODE_EMBEDDING_MODEL` | 코드 전용 임베딩 모델 (미설정 시 기본 모델 사용) | (없음) |
 | `VLLM_BASE_URL` | vLLM 서버 주소 | `http://localhost:8000` |
+| `ANTHROPIC_BASE_URL` | OpenAI Direct 모드 — 외부 프록시/API 주소 | `http://localhost:8082` |
+| `ANTHROPIC_API_KEY` | OpenAI Direct 모드 — API Key | (없음) |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | OpenAI Direct 모드 — 모델명 (Sonnet 슬롯) | (없음) |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | OpenAI Direct 모드 — 모델명 (Opus 슬롯) | (없음) |
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | OpenAI Direct 모드 — 모델명 (Haiku 슬롯) | (없음) |
 | `PROXY_PORT` | claude-code-proxy 포트 | `8082` |
 | `AGENT_MAX_TURNS` | 에이전트 최대 턴 수 | `150` |
 | `DEEPASSIST_MD_MAX_SIZE` | DeepAssist.md 최대 크기 (바이트) | `50000` |
@@ -373,12 +378,15 @@ pytest tests/ -v            # 전체 유닛 테스트
 | **Ollama** (auto) | Native → Proxy 폴백 | 조건부 | Native 시도 → 실패 시 Proxy |
 | **Gemini API** | Proxy | claude-code-proxy | SDK → proxy → Gemini |
 | **vLLM** | Vllm | claude-code-proxy | SDK → proxy → vLLM OpenAI API |
+| **OpenAI** | OpenAIDirect | 없음 (외부) | SDK → 외부 프록시/API 직접 연결 |
 
 > **proxy/auto/vLLM 모드**: `pip install claude-code-proxy` 설치 필요
 >
 > **native 모드**: Ollama v0.14 이상 필요 (`ollama --version`으로 확인). `count_tokens` 엔드포인트 관련 이슈가 있을 수 있음 — 불안정 시 `proxy` 모드 사용 권장
 >
 > **vLLM**: vLLM 서버가 별도로 실행 중이어야 합니다. GPU + CUDA 환경 필요
+>
+> **OpenAI Direct**: 프록시를 자체 기동하지 않고 `.env`의 `ANTHROPIC_BASE_URL`/`ANTHROPIC_API_KEY`/`ANTHROPIC_DEFAULT_*_MODEL` 환경변수로 외부 프록시나 OpenAI 호환 API에 직접 연결. claude-code-proxy를 별도로 실행하거나 OpenAI 호환 API 서버가 이미 가동 중이어야 합니다
 
 ---
 
@@ -404,7 +412,7 @@ dev_agent/
 ├── config.py                   # 중앙 설정 (환경변수 기반, .env 자동 로드)
 ├── models.py                   # 핵심 데이터 모델 (Task, Plan, ToolCallRecord, TypedDict)
 ├── llm_clients.py              # LLM 클라이언트 (Ollama, Gemini)
-├── backend_strategy.py         # 백엔드 전략 (Proxy/Native/vLLM 3종)
+├── backend_strategy.py         # 백엔드 전략 (Proxy/Native/vLLM/OpenAIDirect 4종)
 ├── agent.py                    # Claude Agent SDK Runner (전략 위임)
 ├── mcp_server.py               # MCP 서버 (RAG 도구 + 웹 검색)
 ├── rag/                        # FAISS + BM25 하이브리드 RAG 패키지
@@ -456,7 +464,8 @@ dev_agent/
 │  ├─ BackendStrategy 선택/위임     │  │  ├─ 파일 CRUD (단일 100MB / 전체 100MB) │
 │  │  ├─ Proxy: claude-code-proxy   │  │  ├─ 비활성 워크스페이스 30분 주기 삭제   │
 │  │  ├─ Native: Ollama 직접 연결   │  │  └─ Path Traversal 공격 방지           │
-│  │  └─ vLLM: vLLM+proxy 경유     │  └────────────────────────────────────────┘
+│  │  ├─ vLLM: vLLM+proxy 경유     │  └────────────────────────────────────────┘
+│  │  └─ OpenAI: 외부 API 직접연결  │
 │  ├─ 시스템 프롬프트 주입           │
 │  │  └─ DeepAssist.md 자동 로드    │
 │  └─ Todo List 자동 수립/추적      │
@@ -676,3 +685,4 @@ _rrf_merge → 통합 순위 → 결과 반환 (doc_name/project_name 출처 표
 - **Ollama Native 모드**: 실험적 기능. `count_tokens` 엔드포인트 이슈로 서버가 불안정해질 수 있음. 문제 발생 시 `proxy` 모드로 전환
 - **vLLM**: GPU + CUDA 환경 필수. `--enable-auto-tool-choice`와 `--guided-decoding-backend outlines` 옵션으로 서버를 시작해야 tool calling이 정상 동작
 - **claude-code-proxy**: 에이전트 모드를 사용하려면 반드시 설치 필요 (`pip install claude-code-proxy`)
+- **OpenAI Direct 모드**: `.env`에 `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_DEFAULT_*_MODEL` 환경변수 설정 필요. 외부 프록시나 OpenAI 호환 API 서버가 이미 가동 중이어야 합니다
