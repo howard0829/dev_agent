@@ -27,7 +27,7 @@ Ollama(로컬 LLM), Gemini API, vLLM, OpenAI 호환 API를 지원하며, 여러 
   - **`core/session.py`**: 네임스페이스 세션 상태 관리. `ns(prefix, key)` → `"{prefix}.{key}"` 형식으로 앱별 세션 격리. `init_session(prefix)`, `get_state(prefix, key)`, `set_state(prefix, key, value)`, `reset_chat(prefix)`, `reset_logs(prefix)`, `display_path()`
   - **`core/styles.py`**: 공통 CSS (앱 스위처 카드, 채팅, 사이드바 등). `apply_common_styles()`, `apply_custom_css(css)`
   - **`core/sidebar.py`**: LLM 프로바이더 선택 UI. `render_llm_sidebar()` → 설정 dict 반환 (`llm_provider`, `model_name`, `api_key`, `ollama_url`, `vllm_url`, `enable_thinking`, `agent_mode`, `backend_mode`). vLLM/OpenAI 이외 프로바이더에서 백엔드 모드 선택 UI(`auto`/`proxy`/`native`) 표시. OpenAI 선택 시 `.env`의 `ANTHROPIC_*` 환경변수에서 자동 로드. 앱이 사이드바를 자체 구현할 경우 사용하지 않아도 됨
-  - **`core/chat_ui.py`**: 채팅 탭 공통 로직. `render_chat_tab(prefix, provider_cfg)`. 앱이 채팅 UI를 자체 구현할 경우 사용하지 않아도 됨
+  - **`core/chat_ui.py`**: 채팅 탭 공통 로직. `render_chat_tab(prefix, provider_cfg)`. 에이전트 모드에서 `progress_container`를 통해 메인 채팅 영역에 계획/Task 진행/도구 호출을 실시간 표시. 앱이 채팅 UI를 자체 구현할 경우 사용하지 않아도 됨
   - **`core/workspace_ui.py`**: 워크스페이스 파일 관리 탭. `render_workspace_tab(prefix)`. `httpx`를 통해 FastAPI 서버(`server.py`)와 통신
 - **`config.py`**: 중앙 설정 모듈 (환경변수 기반)
   - 모든 URL, 포트, 상수를 환경변수에서 로드. `.env` 파일 자동 로드
@@ -54,7 +54,9 @@ Ollama(로컬 LLM), Gemini API, vLLM, OpenAI 호환 API를 지원하며, 여러 
   - `select_strategy()`: 프로바이더 + 백엔드 모드에 따라 전략 자동 선택. `auto` 모드에서는 Native 시도 후 실패 시 Proxy 폴백. vLLM/OpenAI는 전용 전략 자동 선택
   - 공유 유틸리티: `_check_ollama()`, `_read_log_tail()`, `_detect_dropped_params()`, `_safe_unlink()`
 - **`agent.py`**: Claude Agent SDK Runner
-  - `ClaudeAgentRunner` 클래스: SDK 기반으로 구동되며 `on_status`/`on_tool_call` 콜백으로 UI와 연동
+  - `ClaudeAgentRunner` 클래스: SDK 기반으로 구동되며 `on_status`/`on_tool_call`/`on_agent_text` 콜백으로 UI와 연동
+  - **실시간 진행 표시**: `on_agent_text` 콜백으로 에이전트의 계획/설명 텍스트를 메인 채팅 영역에 실시간 스트리밍. `"agent_text"` 이벤트로 도구 호출 로그(`"status"`)와 분리
+  - **강화된 시스템 프롬프트**: `forced_prompt`가 각 Task 시작 시 `🔄 Task N 시작:` 마커 출력, 도구 호출 전 이유 설명을 지시하여 진행 상황의 가독성 향상
   - **백엔드 전략 위임**: `backend_mode` 파라미터(`auto`/`proxy`/`native`)로 `backend_strategy.py`의 전략을 선택. `_async_run()`에서 `strategy.activate()` → SDK 호출 → `strategy.cleanup()` 순서로 실행
   - `ALLOWED_TOOLS`: SDK에 전달할 허용 도구 목록
   - **자동 룰 로더**: 작업 디렉토리에 `DeepAssist.md` 파일이 존재하면 시스템 프롬프트에 자동 주입 (`DEEPASSIST_MD_MAX_SIZE` 크기 제한 적용)
@@ -236,7 +238,8 @@ Ollama(로컬 LLM), Gemini API, vLLM, OpenAI 호환 API를 지원하며, 여러 
 - 네임스페이스 세션 키: `{prefix}.messages`, `{prefix}.tool_log`, `{prefix}.is_running` 등
 - 콜백 팩토리 `_make_callbacks(prefix, ...)`: todo/status 플레이스홀더와 prefix를 바인딩
 - 에이전트 생성 `_get_agent(prefix, provider_cfg, callbacks, is_agent_mode)`: provider_cfg dict에서 설정 읽음
-- 자체 채팅 UI를 가진 앱(TestMancer 등)은 `page.py`에서 직접 구현
+- **실시간 진행 표시**: `progress_container` + `progress_state` dict로 에이전트 텍스트(계획/설명)와 도구 호출 로그를 메인 채팅 영역에 실시간 렌더링. `on_agent_text` 콜백으로 최근 3블록, 도구 로그 최근 5개 표시. `🔄`/`✅` 마커는 볼드 강조
+- 자체 채팅 UI를 가진 앱(TestMancer 등)은 `page.py`에서 동일한 `progress_container` 패턴을 직접 구현
 
 **앱 스위처 UI(`app.py`) 수정:**
 - 메인 화면 상단의 카드 바로 앱 전환. 각 앱은 `st.button(type="primary"|"secondary")`로 렌더링

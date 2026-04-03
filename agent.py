@@ -77,6 +77,7 @@ class ClaudeAgentRunner:
         self.on_tool_call = on_tool_call or (lambda *a: None)
         self.on_plan_update = on_plan_update or (lambda *a: None)
         self.on_todo_update: Callable = lambda *a: None
+        self.on_agent_text: Callable = lambda *a: None
 
         self.tool_call_log: List[ToolCallRecord] = []
         self.conversation_history: List[Dict] = []
@@ -142,6 +143,8 @@ class ClaudeAgentRunner:
                 elif event_type == "__ERROR__":
                     final_result = f"Claude 오류: {data}"
                     break
+                elif event_type == "agent_text":
+                    self.on_agent_text(data)
                 elif event_type == "status":
                     self.on_status(data)
                 elif event_type == "tool_call":
@@ -230,12 +233,17 @@ class ClaudeAgentRunner:
         last_tool_record = None
         todo_items: List[dict] = []
 
-        # Todo 리스트 강제화 프롬프트
+        # Todo 리스트 강제화 + 진행 상황 설명 프롬프트
         forced_prompt = (
-            "[System Instruction: 작업을 시작하기 전에 반드시 구체적인 Todo List를 넘버링(1. 2. 3. ...) 형태로 먼저 작성하고 출력하세요. "
-            "각 Task를 완료할 때마다 반드시 '✅ Task N 완료: <작업 내용>' 형태로 출력하세요. "
-            "그 후 첫 번째 항목부터 실행하세요. MUST USE TOOLS: 코드를 작성하거나 수정할 때는 반드시 'Write' 또는 'Edit' 등의 도구(Tool)를 직접 호출하여 실제 파일 시스템에 저장하세요. "
-            "절대로 마크다운 코드 블럭만 출력하고 파일 생성을 완료했다고 거짓말(Hallucinate)하지 마세요.]\n\n"
+            "[System Instruction]\n"
+            "## 작업 진행 규칙\n"
+            "1. 작업을 시작하기 전에 반드시 구체적인 Todo List를 넘버링(1. 2. 3. ...) 형태로 먼저 작성하고 출력하세요.\n"
+            "2. 각 Task를 시작할 때 '🔄 Task N 시작: <무엇을 할 것인지 한 줄 설명>' 형태로 출력하세요.\n"
+            "3. 각 Task를 완료할 때 '✅ Task N 완료: <완료한 작업 요약>' 형태로 출력하세요.\n"
+            "4. 도구를 호출하기 전에 왜 그 도구를 사용하는지 한 줄로 간단히 설명하세요.\n"
+            "   예: '로그인 폼 컴포넌트를 작성합니다.' → Write 도구 호출\n"
+            "5. MUST USE TOOLS: 코드를 작성하거나 수정할 때는 반드시 Write/Edit 등의 도구를 직접 호출하여 실제 파일 시스템에 저장하세요. "
+            "절대로 마크다운 코드 블럭만 출력하고 파일 생성을 완료했다고 거짓말(Hallucinate)하지 마세요.\n\n"
             f"{prompt}"
         )
 
@@ -254,6 +262,7 @@ class ClaudeAgentRunner:
                                 text = block.text.strip()
                                 if text:
                                     final_text += block.text
+                                    event_queue.put(("agent_text", text))
                                     event_queue.put(("status", text))
                                     self._parse_markdown_todos(text, todo_items, event_queue)
 

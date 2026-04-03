@@ -200,30 +200,8 @@ def _handle_prompt(prefix: str, prompt: str, provider_cfg: dict, callbacks: dict
     is_agent_mode = agent_mode.startswith("🤖")
     agent = _get_agent(prefix, provider_cfg, callbacks, is_agent_mode)
 
-    main_log_container = st.empty()
-    live_logs: list[str] = []
-
-    # 콜백 래핑은 ClaudeAgentRunner(에이전트 모드)에서만 적용
-    if hasattr(agent, "on_tool_call"):
-        orig_on_tool_call = agent.on_tool_call
-        def live_on_tool_call(record: ToolCallRecord):
-            orig_on_tool_call(record)
-            live_logs.append(f"🔧 **{record.tool_name}** 호출 완료")
-            with main_log_container.container():
-                st.info("\n\n".join(live_logs[-8:]))
-        agent.on_tool_call = live_on_tool_call
-
-    if hasattr(agent, "on_status"):
-        orig_on_status = agent.on_status
-        def live_on_status(msg: str):
-            orig_on_status(msg)
-            live_logs.append(msg)
-            with main_log_container.container():
-                st.info("\n\n".join(live_logs[-8:]))
-        agent.on_status = live_on_status
-
     if is_agent_mode:
-        # ── 에이전트 모드: 연결 확인 + 스피너 + SDK 호출 ──
+        # ── 에이전트 모드: 연결 확인 + 실시간 진행 표시 ──
         ok, conn_msg = agent.check_connection()
         if not ok:
             response = f"❌ 에이전트 연결 실패:\n\n{conn_msg}"
@@ -236,13 +214,82 @@ def _handle_prompt(prefix: str, prompt: str, provider_cfg: dict, callbacks: dict
             st.rerun()
             return
 
-        with st.spinner("🤖 에이전트 작업 중..."):
-            try:
-                response = agent.run(prompt)
-            except Exception as e:
-                response = f"❌ 실행 중 오류가 발생했습니다:\n```\n{e}\n```"
+        # 실시간 진행 상황 표시를 위한 상태 관리
+        progress_container = st.empty()
+        progress_state = {
+            "agent_texts": [],    # 에이전트 설명 텍스트
+            "tool_logs": [],      # 도구 호출 요약
+            "current_task": "",   # 현재 진행 중인 태스크
+        }
 
-        main_log_container.empty()
+        def _render_progress():
+            """메인 채팅 영역에 실시간 진행 상황을 렌더링"""
+            with progress_container.container():
+                # 최근 에이전트 텍스트 표시 (마지막 3개)
+                recent_texts = progress_state["agent_texts"][-3:]
+                if recent_texts:
+                    for txt in recent_texts:
+                        # 줄바꿈으로 분리하여 주요 라인만 표시
+                        lines = txt.strip().split("\n")
+                        for line in lines[:5]:
+                            line_s = line.strip()
+                            if not line_s:
+                                continue
+                            # Task 시작/완료 마커는 강조 표시
+                            if line_s.startswith("🔄") or line_s.startswith("✅"):
+                                st.markdown(f"**{line_s}**")
+                            elif line_s[0:1].isdigit() and ". " in line_s[:5]:
+                                st.markdown(f"  {line_s}")
+                            else:
+                                st.caption(line_s[:200])
+
+                # 최근 도구 호출 로그 (마지막 5개)
+                recent_tools = progress_state["tool_logs"][-5:]
+                if recent_tools:
+                    st.markdown("---")
+                    for tl in recent_tools:
+                        st.markdown(tl)
+
+        # 에이전트 텍스트 콜백 (계획, 설명, Task 진행)
+        if hasattr(agent, "on_agent_text"):
+            def _on_agent_text(text: str):
+                progress_state["agent_texts"].append(text)
+                _render_progress()
+            agent.on_agent_text = _on_agent_text
+
+        # 도구 호출 콜백
+        if hasattr(agent, "on_tool_call"):
+            orig_on_tool_call = agent.on_tool_call
+            def live_on_tool_call(record: ToolCallRecord):
+                orig_on_tool_call(record)
+                summary = f"🔧 `{record.tool_name}`"
+                if record.tool_name in ("Read", "Write", "Edit"):
+                    path = record.arguments.get("file_path", record.arguments.get("path", ""))
+                    short = path[path.find("/workspaces/"):] if "/workspaces/" in path else path.split("/")[-1]
+                    summary += f" — {short}"
+                elif record.tool_name == "Bash":
+                    cmd = record.arguments.get("command", "")[:60]
+                    summary += f" — `{cmd}`"
+                elif record.tool_name in ("Glob", "Grep"):
+                    pattern = record.arguments.get("pattern", "")
+                    summary += f" — `{pattern}`"
+                progress_state["tool_logs"].append(summary)
+                _render_progress()
+            agent.on_tool_call = live_on_tool_call
+
+        # 상태 콜백 (사이드 패널에 기록)
+        if hasattr(agent, "on_status"):
+            orig_on_status = agent.on_status
+            def live_on_status(msg: str):
+                orig_on_status(msg)
+            agent.on_status = live_on_status
+
+        try:
+            response = agent.run(prompt)
+        except Exception as e:
+            response = f"❌ 실행 중 오류가 발생했습니다:\n```\n{e}\n```"
+
+        progress_container.empty()
 
         # 상태 로그 파일 저장
         status_log = get_state(prefix, "status_log", [])

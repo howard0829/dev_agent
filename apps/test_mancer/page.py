@@ -267,11 +267,63 @@ def _handle_prompt(prefix: str, prompt: str, sidebar_cfg: dict, callbacks: dict)
     )
     enriched_prompt = context_prefix + prompt
 
-    with st.spinner("🧪 TestMancer 작업 중..."):
-        try:
-            response = agent.run(enriched_prompt)
-        except Exception as e:
-            response = f"❌ 실행 중 오류:\n```\n{e}\n```"
+    # 실시간 진행 상황 표시
+    progress_container = st.empty()
+    progress_state = {
+        "agent_texts": [],
+        "tool_logs": [],
+    }
+
+    def _render_progress():
+        with progress_container.container():
+            recent_texts = progress_state["agent_texts"][-3:]
+            if recent_texts:
+                for txt in recent_texts:
+                    lines = txt.strip().split("\n")
+                    for line in lines[:5]:
+                        line_s = line.strip()
+                        if not line_s:
+                            continue
+                        if line_s.startswith("🔄") or line_s.startswith("✅"):
+                            st.markdown(f"**{line_s}**")
+                        elif line_s[0:1].isdigit() and ". " in line_s[:5]:
+                            st.markdown(f"  {line_s}")
+                        else:
+                            st.caption(line_s[:200])
+            recent_tools = progress_state["tool_logs"][-5:]
+            if recent_tools:
+                st.markdown("---")
+                for tl in recent_tools:
+                    st.markdown(tl)
+
+    if hasattr(agent, "on_agent_text"):
+        def _on_agent_text(text: str):
+            progress_state["agent_texts"].append(text)
+            _render_progress()
+        agent.on_agent_text = _on_agent_text
+
+    if hasattr(agent, "on_tool_call"):
+        orig_on_tool_call = agent.on_tool_call
+        def live_on_tool_call(record):
+            orig_on_tool_call(record)
+            summary = f"🔧 `{record.tool_name}`"
+            if record.tool_name in ("Read", "Write", "Edit"):
+                path = record.arguments.get("file_path", record.arguments.get("path", ""))
+                short = path[path.find("/workspaces/"):] if "/workspaces/" in path else path.split("/")[-1]
+                summary += f" — {short}"
+            elif record.tool_name == "Bash":
+                cmd = record.arguments.get("command", "")[:60]
+                summary += f" — `{cmd}`"
+            progress_state["tool_logs"].append(summary)
+            _render_progress()
+        agent.on_tool_call = live_on_tool_call
+
+    try:
+        response = agent.run(enriched_prompt)
+    except Exception as e:
+        response = f"❌ 실행 중 오류:\n```\n{e}\n```"
+
+    progress_container.empty()
 
     # 테스트 결과 히스토리에 추가
     test_results = get_state(prefix, "test_results", [])
